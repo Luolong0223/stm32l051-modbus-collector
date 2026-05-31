@@ -1,0 +1,20 @@
+# Build
+*.o
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+*.d
+
+# IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.ioc.bak
+
+# OS
+.DS_Store
+Thumbs.db

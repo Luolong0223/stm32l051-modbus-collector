@@ -1,0 +1,215 @@
+/**
+ * @file    sys_config.h
+ * @brief   系统全局配置定义 — 寄存器映射、EEPROM布局、数据结构
+ * @note    STM32L051K8 | UART2=Modbus RTU | UART1=数据上报 | 内部EEPROM存储
+ * @version 2.1 — 修复全局变量重复定义、增加结构体大小校验、增加从站超时
+ */
+#ifndef __SYS_CONFIG_H
+#define __SYS_CONFIG_H
+
+#include "stm32l0xx_hal.h"
+#include "main.h"
+#include <stdint.h>
+#include <string.h>
+#include <stdio.h>
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  系统限制常量
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#define MAX_SLAVE_COUNT         5       /* 最大采集从机数量 */
+#define MAX_DATA_POINTS         8       /* 单从机最大数据点数量 */
+#define NAME_MAX_LEN            20      /* 名称最大字符数(不含\0) */
+#define NAME_BUF_SIZE           21      /* 名称缓冲区大小(含\0) */
+
+#define REPORT_FORMAT_TEXT      0
+#define REPORT_FORMAT_JSON      1
+#define REPORT_FORMAT_HEX       2
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  Modbus 功能码
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#define MB_FC_READ_HOLDING_REGS     0x03
+#define MB_FC_READ_INPUT_REGS       0x04
+#define MB_FC_WRITE_SINGLE_REG      0x06
+#define MB_FC_WRITE_MULTIPLE_REGS   0x10
+
+#define MB_EX_NONE                  0x00
+#define MB_EX_ILLEGAL_FUNCTION      0x01
+#define MB_EX_ILLEGAL_DATA_ADDR     0x02
+#define MB_EX_ILLEGAL_DATA_VALUE    0x03
+#define MB_EX_SLAVE_DEVICE_FAILURE  0x04
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  通信参数
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#define MB_MASTER_TIMEOUT_MS        1000    /* 主站等待响应超时 */
+#define MB_FRAME_SILENT_MS          5       /* 帧间静默 (3.5字符 @9600≈4ms) */
+#define MB_RX_BUF_SIZE              256
+#define MB_TX_BUF_SIZE              256
+#define MB_FRAME_DETECT_MS          10      /* 帧结束检测超时 (无新字节) */
+#define MB_SLAVE_LISTEN_MS          50      /* 从站监听超时，超时后切回主站 */
+#define REPORT_BUF_SIZE             512
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  数据类型 & 字节序枚举
+ * ═══════════════════════════════════════════════════════════════════════════ */
+typedef enum {
+    DATA_TYPE_U16   = 0,
+    DATA_TYPE_I16   = 1,
+    DATA_TYPE_U32   = 2,
+    DATA_TYPE_I32   = 3,
+    DATA_TYPE_FLOAT = 4
+} DataType_t;
+
+typedef enum {
+    BYTE_ORDER_ABCD = 0,    /* Big-Endian 标准网络序 */
+    BYTE_ORDER_BADC = 1,    /* Big-Endian 字内字节交换 */
+    BYTE_ORDER_CDAB = 2,    /* 16位字交换 */
+    BYTE_ORDER_DCBA = 3     /* Full Little-Endian */
+} ByteOrder_t;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  采集数据点配置 (含名称)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+typedef struct {
+    uint16_t    reg_addr;                   /* 从机寄存器起始地址 */
+    uint8_t     data_type;                  /* DataType_t */
+    uint8_t     byte_order;                 /* ByteOrder_t */
+    char        name[NAME_BUF_SIZE];        /* 数据点名称 e.g. "温度" */
+    uint8_t     _pad[3];                    /* 对齐至 28 字节 */
+} DataPointCfg_t;   /* sizeof = 28 */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  从机配置 (含名称)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+typedef struct {
+    uint8_t         slave_addr;                     /* Modbus 从机地址 */
+    uint8_t         enabled;                        /* 1=启用 0=停用 */
+    uint8_t         data_point_count;               /* 数据点数量 0~8 */
+    uint8_t         _reserved;
+    uint32_t        poll_period_ms;                 /* 轮询周期 ms */
+    char            name[NAME_BUF_SIZE];            /* 设备名称 e.g. "1号温湿度" */
+    uint8_t         _pad[3];                        /* 对齐 */
+    DataPointCfg_t  data_points[MAX_DATA_POINTS];   /* 数据点配置 */
+} SlaveCfg_t;   /* sizeof = 264 */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  系统配置 (存入 EEPROM, 总计约 1352 字节 < 2048)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+typedef struct {
+    /* --- UART2 / Modbus 物理层 --- */
+    uint32_t    uart2_baudrate;
+    uint8_t     uart2_parity;           /* 0=无 1=奇 2=偶 */
+    uint8_t     uart2_stopbits;         /* 1 或 2 */
+    uint16_t    rs485_de_delay_us;      /* DE 使能延时 us */
+    uint16_t    rs485_re_delay_us;      /* RE 使能延时 us */
+    uint8_t     local_mb_addr;          /* 本机 Modbus 从站地址 */
+    uint8_t     slave_count;            /* 采集从机总数 1~5 */
+    uint8_t     report_format;          /* 0=TEXT 1=JSON 2=HEX */
+    uint8_t     _reserved0;
+    uint32_t    uart1_baudrate;
+
+    /* --- 从机配置 --- */
+    SlaveCfg_t  slaves[MAX_SLAVE_COUNT];
+
+    /* --- 校验 --- */
+    uint32_t    config_version;
+} SystemCfg_t;
+
+/* 编译期结构体大小校验，防止不同编译器对齐差异导致 EEPROM 数据不兼容 */
+_Static_assert(sizeof(DataPointCfg_t) == 28, "DataPointCfg_t size mismatch");
+_Static_assert(sizeof(SlaveCfg_t) == 264, "SlaveCfg_t size mismatch");
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  运行时采集结果
+ * ═══════════════════════════════════════════════════════════════════════════ */
+typedef struct {
+    float       values[MAX_DATA_POINTS];    /* 解析后的浮点值 */
+    uint8_t     valid[MAX_DATA_POINTS];     /* 该点数据是否有效 */
+    uint32_t    last_poll_tick;             /* 上次轮询时刻 */
+    uint8_t     error_count;                /* 连续通信错误计数 */
+    uint8_t     online;                     /* 设备在线 */
+    uint16_t    _pad;
+} SlaveData_t;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  Modbus 主站状态机
+ * ═══════════════════════════════════════════════════════════════════════════ */
+typedef enum {
+    MB_MASTER_IDLE = 0,
+    MB_MASTER_SENDING,
+    MB_MASTER_WAIT_RESP,
+    MB_MASTER_PROCESSING
+} MBMasterState_t;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  Modbus 主站句柄 (改进: 超时帧检测替代单字节DMA)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+typedef struct {
+    UART_HandleTypeDef  *huart;
+    MBMasterState_t     state;
+
+    /* 接收: 逐字节中断 + 超时帧检测 */
+    uint8_t             rx_buf[MB_RX_BUF_SIZE];
+    volatile uint16_t   rx_pos;             /* 当前接收位置 */
+    volatile uint32_t   last_rx_tick;       /* 最后一次收到字节的时间 */
+    volatile uint8_t    frame_ready;        /* 帧接收完成标志 */
+
+    /* 发送 */
+    uint8_t             tx_buf[MB_TX_BUF_SIZE];
+
+    /* 状态机 */
+    uint32_t            wait_start_tick;
+    uint8_t             current_slave;
+    uint8_t             current_point;
+    uint8_t             retry_cnt;
+    uint8_t             _pad;
+} MBMasterHandle_t;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  Modbus 从站句柄
+ * ═══════════════════════════════════════════════════════════════════════════ */
+typedef struct {
+    UART_HandleTypeDef  *huart;
+    uint8_t             rx_buf[MB_RX_BUF_SIZE];
+    uint8_t             tx_buf[MB_TX_BUF_SIZE];
+    volatile uint16_t   rx_pos;
+    volatile uint32_t   last_rx_tick;
+    volatile uint8_t    frame_ready;
+    uint8_t             _pad[3];
+} MBSlaveHandle_t;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  运行模式 (主从分时复用)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+typedef enum {
+    RUN_MODE_MASTER = 0,    /* 主站轮询采集模式 */
+    RUN_MODE_SLAVE          /* 从站配置监听模式 */
+} RunMode_t;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  全局变量 extern — 定义仅在 main_app.c 中
+ * ═══════════════════════════════════════════════════════════════════════════ */
+extern SystemCfg_t      g_sys_cfg;
+extern SlaveData_t      g_slave_data[MAX_SLAVE_COUNT];
+extern MBMasterHandle_t g_mb_master;
+extern MBSlaveHandle_t  g_mb_slave;
+extern RunMode_t        g_run_mode;
+extern UART_HandleTypeDef huart1;
+extern UART_HandleTypeDef huart2;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  默认配置
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#define CFG_DEFAULT_BAUDRATE        9600
+#define CFG_DEFAULT_PARITY          0
+#define CFG_DEFAULT_STOPBITS        1
+#define CFG_DEFAULT_DE_DELAY        50
+#define CFG_DEFAULT_RE_DELAY        50
+#define CFG_DEFAULT_MB_ADDR         1
+#define CFG_DEFAULT_SLAVE_COUNT     1
+#define CFG_DEFAULT_REPORT_FMT      REPORT_FORMAT_JSON
+#define CFG_DEFAULT_POLL_MS         1000
+#define CFG_VERSION                 0xA5B6C7D9  /* v2 版本标识 */
+
+#endif /* __SYS_CONFIG_H */
