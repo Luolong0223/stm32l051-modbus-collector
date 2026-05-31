@@ -43,12 +43,15 @@
  *  通信参数
  * ═══════════════════════════════════════════════════════════════════════════ */
 #define MB_MASTER_TIMEOUT_MS        1000    /* 主站等待响应超时 */
+#define MB_MASTER_RETRY_MAX         2       /* 主站单数据点最大重试次数 */
 #define MB_FRAME_SILENT_MS          5       /* 帧间静默 (3.5字符 @9600≈4ms) */
 #define MB_RX_BUF_SIZE              256
 #define MB_TX_BUF_SIZE              256
 #define MB_FRAME_DETECT_MS          10      /* 帧结束检测超时 (无新字节) */
-#define MB_SLAVE_LISTEN_MS          200     /* 从站监听超时，超时后切回主站 */
-#define REPORT_BUF_SIZE             512
+#define MB_SLAVE_LISTEN_MS          50      /* 从站监听超时，超时后切回主站 */
+#define MB_SLAVE_COOLDOWN_MS        50      /* 从站→主站冷却期，防止快速抖动 */
+#define REPORT_BUF_SIZE             640     /* 增大以容纳 HEX 格式最坏情况 */
+#define HEX_TMP_BUF_SIZE            200     /* HEX 原始数据缓冲 (5×38+5=195 max) */
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  数据类型 & 字节序枚举
@@ -91,7 +94,7 @@ typedef struct {
     char            name[NAME_BUF_SIZE];            /* 设备名称 e.g. "1号温湿度" */
     uint8_t         _pad[3];                        /* 对齐 */
     DataPointCfg_t  data_points[MAX_DATA_POINTS];   /* 数据点配置 */
-} SlaveCfg_t;   /* sizeof = 264 */
+} SlaveCfg_t;   /* sizeof = 256 (GCC -O0, ARM32 4-byte align) */
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  系统配置 (存入 EEPROM, 总计约 1352 字节 < 2048)
@@ -116,10 +119,11 @@ typedef struct {
     uint32_t    config_version;
 } SystemCfg_t;
 
-/* 注意: 不同编译器/对齐设置下结构体大小可能不同
- * 修改结构体后务必确认 sizeof 与 EEPROM 布局兼容
- * (当前 ARMCC: sizeof(SlaveCfg_t) 可能 != 264，需实测)
- */
+/* 编译期校验结构体大小 (C11 _Static_assert) */
+_Static_assert(sizeof(DataPointCfg_t) == 28, "DataPointCfg_t size mismatch");
+_Static_assert(sizeof(SystemCfg_t) <= EEPROM_SIZE, "SystemCfg_t exceeds EEPROM size");
+_Static_assert(MAX_SLAVE_COUNT <= 5, "MAX_SLAVE_COUNT must be <= 5");
+_Static_assert(MAX_DATA_POINTS <= 8, "MAX_DATA_POINTS must be <= 8");
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  运行时采集结果
@@ -196,6 +200,8 @@ extern SlaveData_t      g_slave_data[MAX_SLAVE_COUNT];
 extern MBMasterHandle_t g_mb_master;
 extern MBSlaveHandle_t  g_mb_slave;
 extern RunMode_t        g_run_mode;
+extern volatile uint8_t g_uart2_reconfig_pending;   /* UART2 延迟重配标志 */
+extern volatile uint8_t g_eeprom_save_pending;      /* EEPROM 延迟保存标志 */
 extern UART_HandleTypeDef huart1;
 extern UART_HandleTypeDef huart2;
 

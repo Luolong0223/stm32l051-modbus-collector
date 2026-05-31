@@ -13,7 +13,7 @@
 static char report_buf[REPORT_BUF_SIZE];
 
 /* HEX 格式临时缓冲 (避免在栈上分配 256 字节) */
-static uint8_t hex_tmp[256];
+static uint8_t hex_tmp[HEX_TMP_BUF_SIZE];
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  浮点转字符串 (轻量实现, 避免 sprintf %f 消耗 FLASH)
@@ -38,12 +38,14 @@ static uint16_t ftostr(float val, char *buf, uint8_t decimals)
     for (uint8_t i = 0; i < len; i++) p[i] = tmp[len - 1 - i];
     p += len;
 
-    /* 小数部分 */
+    /* 小数部分 (rounding) */
     if (decimals > 0) {
         *p++ = '.';
         for (uint8_t i = 0; i < decimals; i++) {
             frac *= 10.0f;
-            *p++ = '0' + (uint8_t)frac;
+            uint8_t digit = (uint8_t)(frac + 0.5f);  /* 四舍五入 */
+            if (digit > 9) digit = 9;
+            *p++ = '0' + digit;
             frac -= (float)(uint8_t)frac;
         }
     }
@@ -183,10 +185,11 @@ static uint16_t format_hex(char *buf, uint16_t buf_size)
         hex_tmp[pos++] = cfg->data_point_count;
 
         for (uint8_t pt = 0; pt < cfg->data_point_count && pos + 5 < sizeof(hex_tmp); pt++) {
-            union { float f; uint8_t b[4]; } conv;
-            conv.f = data->valid[pt] ? data->values[pt] : 0.0f;
-            hex_tmp[pos++] = conv.b[0]; hex_tmp[pos++] = conv.b[1];
-            hex_tmp[pos++] = conv.b[2]; hex_tmp[pos++] = conv.b[3];
+            float fval = data->valid[pt] ? data->values[pt] : 0.0f;
+            uint8_t fb[4];
+            memcpy(fb, &fval, 4);  /* 安全 type-punning */
+            hex_tmp[pos++] = fb[0]; hex_tmp[pos++] = fb[1];
+            hex_tmp[pos++] = fb[2]; hex_tmp[pos++] = fb[3];
         }
     }
 
@@ -253,12 +256,18 @@ void REPORT_Process(void)
 
     /* 上报间隔取最短轮询周期 */
     uint32_t min_period = 1000;
+    uint8_t has_enabled = 0;
     for (uint8_t s = 0; s < g_sys_cfg.slave_count; s++) {
-        if (g_sys_cfg.slaves[s].enabled &&
-            g_sys_cfg.slaves[s].poll_period_ms < min_period) {
-            min_period = g_sys_cfg.slaves[s].poll_period_ms;
+        if (g_sys_cfg.slaves[s].enabled) {
+            has_enabled = 1;
+            if (g_sys_cfg.slaves[s].poll_period_ms < min_period) {
+                min_period = g_sys_cfg.slaves[s].poll_period_ms;
+            }
         }
     }
+
+    /* 无启用从机时跳过上报 */
+    if (!has_enabled) return;
 
     if ((now - last_report_tick) < min_period) return;
     last_report_tick = now;

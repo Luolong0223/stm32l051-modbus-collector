@@ -18,6 +18,8 @@
 MBMasterHandle_t g_mb_master;
 MBSlaveHandle_t  g_mb_slave;
 RunMode_t        g_run_mode = RUN_MODE_MASTER;
+volatile uint8_t g_uart2_reconfig_pending = 0;  /* UART2 延迟重配标志 */
+volatile uint8_t g_eeprom_save_pending = 0;     /* EEPROM 延迟保存标志 */
 
 /* 逐字节接收临时缓冲 */
 static uint8_t master_rx_byte;
@@ -25,6 +27,9 @@ static uint8_t slave_rx_byte;
 
 /* 从站进入时刻 (用于超时切回主站) */
 static uint32_t slave_enter_tick;
+
+/* 主从切换冷却期 (防止快速抖动) */
+static uint32_t last_master_switch_tick = 0;
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  CRC16-Modbus 查表
@@ -317,12 +322,10 @@ float MB_Parse_Registers(const uint16_t *regs, uint8_t data_type, uint8_t byte_o
         case DATA_TYPE_FLOAT:
             reorder_bytes(regs, 2, byte_order, reordered);
             {
-                union { uint8_t b[4]; float f; } conv;
-                conv.b[3] = reordered[0];  /* MSB */
-                conv.b[2] = reordered[1];
-                conv.b[1] = reordered[2];
-                conv.b[0] = reordered[3];  /* LSB */
-                return conv.f;
+                float fval;
+                /* 使用 memcpy 进行安全的 type-punning (符合 C11 标准) */
+                memcpy(&fval, reordered, sizeof(float));
+                return fval;
             }
 
         default:
@@ -425,6 +428,12 @@ void MB_Master_Process(void)
 
     /* ─── IDLE: 检查是否需要轮询 ─── */
     case MB_MASTER_IDLE: {
+        /* 延迟重配: 主站空闲时安全执行 UART2 重配 */
+        if (g_uart2_reconfig_pending) {
+            g_uart2_reconfig_pending = 0;
+            MB_Reconfigure_UART();
+        }
+
         for (uint8_t i = 0; i < g_sys_cfg.slave_count; i++) {
             uint8_t idx = (g_mb_master.current_slave + i) % g_sys_cfg.slave_count;
             SlaveCfg_t *s = &g_sys_cfg.slaves[idx];
@@ -455,6 +464,21 @@ void MB_Master_Process(void)
         if ((now - g_mb_master.wait_start_tick) > MB_MASTER_TIMEOUT_MS) {
             /* 超时 */
             uint8_t sidx = g_mb_master.current_slave;
+            SlaveCfg_t *s = &g_sys_cfg.slaves[sidx];
+
+            g_mb_master.retry_cnt++;
+            if (g_mb_master.retry_cnt <= MB_MASTER_RETRY_MAX) {
+                /* 重试: 重新发送相同请求 */
+                DataPointCfg_t *pt = &s->data_points[g_mb_master.current_point];
+                uint8_t need_regs = (pt->data_type <= DATA_TYPE_I16) ? 1 : 2;
+                uint16_t frame_len = MB_Master_Build_ReadHolding(
+                    g_mb_master.tx_buf, s->slave_addr, pt->reg_addr, need_regs);
+                MB_Master_Send(frame_len);
+                g_mb_master.wait_start_tick = now;
+                return;
+            }
+
+            /* 重试耗尽, 标记错误并跳到下一个数据点 */
             g_slave_data[sidx].error_count++;
             if (g_slave_data[sidx].error_count >= 3) {
                 g_slave_data[sidx].online = 0;
@@ -463,7 +487,7 @@ void MB_Master_Process(void)
             }
             /* 下一个数据点 */
             g_mb_master.current_point++;
-            if (g_mb_master.current_point >= g_sys_cfg.slaves[sidx].data_point_count) {
+            if (g_mb_master.current_point >= s->data_point_count) {
                 g_mb_master.current_slave = (sidx + 1) % g_sys_cfg.slave_count;
             }
             g_mb_master.state = MB_MASTER_IDLE;
@@ -621,20 +645,21 @@ static uint8_t MB_Slave_Write_Reg(uint16_t reg_addr, uint16_t value)
     switch (reg_addr) {
         case 0x0000:
             g_sys_cfg.uart2_baudrate = (g_sys_cfg.uart2_baudrate & 0xFFFF0000) | value;
+            g_uart2_reconfig_pending = 1;  /* 延迟重配，不在从站处理中执行 */
             return 1;
         case 0x0001:
             g_sys_cfg.uart2_baudrate = (g_sys_cfg.uart2_baudrate & 0x0000FFFF) | ((uint32_t)value << 16);
-            MB_Reconfigure_UART();
+            g_uart2_reconfig_pending = 1;  /* 延迟重配 */
             return 1;
         case 0x0002:
             if (value > 2) return 0;
             g_sys_cfg.uart2_parity = (uint8_t)value;
-            MB_Reconfigure_UART();
+            g_uart2_reconfig_pending = 1;
             return 1;
         case 0x0003:
             if (value != 1 && value != 2) return 0;
             g_sys_cfg.uart2_stopbits = (uint8_t)value;
-            MB_Reconfigure_UART();
+            g_uart2_reconfig_pending = 1;
             return 1;
         case 0x0004:
             g_sys_cfg.rs485_de_delay_us = value;
@@ -659,11 +684,10 @@ static uint8_t MB_Slave_Write_Reg(uint16_t reg_addr, uint16_t value)
             return 1;
         case 0x000A:
             g_sys_cfg.uart1_baudrate = (g_sys_cfg.uart1_baudrate & 0x0000FFFF) | ((uint32_t)value << 16);
-            {
-                uint32_t pclk = HAL_RCC_GetPCLK2Freq();
-                uint32_t brr = (pclk + g_sys_cfg.uart1_baudrate / 2) / g_sys_cfg.uart1_baudrate;
-                huart1.Instance->BRR = (uint16_t)brr;
-            }
+            /* 使用 HAL 安全重配 UART1 波特率 */
+            HAL_UART_AbortReceive(&huart1);
+            huart1.Init.BaudRate = g_sys_cfg.uart1_baudrate;
+            HAL_UART_Init(&huart1);
             return 1;
     }
 
@@ -759,41 +783,66 @@ static uint8_t MB_Slave_Write_Reg(uint16_t reg_addr, uint16_t value)
 
 /**
  * @brief  处理名称寄存器的批量写入 (0x10 专用)
- * @note   当写入范围覆盖名称寄存器时, 将寄存器值转回字符串存入配置
+ * @note   当写入范围与名称寄存器有重叠时, 将寄存器值转回字符串存入配置
  */
 static void MB_Slave_Commit_NameWrites(uint16_t start_addr, uint16_t count,
                                         const uint8_t *data)
 {
+    uint16_t end_addr = start_addr + count;
+
     for (uint8_t s = 0; s < MAX_SLAVE_COUNT; s++) {
-        /* 设备名称 */
+        /* 设备名称: 检查写入范围与名称区域是否有重叠 */
         uint16_t name_base = SLAVE_NAME_BASE(s);
-        if (start_addr >= name_base && start_addr + count <= name_base + 10) {
+        uint16_t name_end  = name_base + 10;
+        if (start_addr < name_end && end_addr > name_base) {
+            /* 有重叠: 从写入数据中提取覆盖的部分 */
             uint16_t regs[10] = {0};
-            uint16_t off = start_addr - name_base;
-            for (uint16_t i = 0; i < count && (off + i) < 10; i++) {
-                regs[off + i] = ((uint16_t)data[i * 2] << 8) | data[i * 2 + 1];
+            /* 先读出当前名称作为基础 */
+            char name_copy[NAME_BUF_SIZE];
+            strncpy(name_copy, g_sys_cfg.slaves[s].name, NAME_BUF_SIZE - 1);
+            name_copy[NAME_BUF_SIZE - 1] = '\0';
+            uint8_t rc;
+            str_to_regs(name_copy, regs, &rc);
+
+            /* 用写入数据覆盖重叠部分 */
+            uint16_t overlap_start = (start_addr > name_base) ? start_addr : name_base;
+            uint16_t overlap_end   = (end_addr < name_end) ? end_addr : name_end;
+            for (uint16_t addr = overlap_start; addr < overlap_end; addr++) {
+                uint16_t off = addr - name_base;
+                uint16_t data_off = addr - start_addr;
+                regs[off] = ((uint16_t)data[data_off * 2] << 8) | data[data_off * 2 + 1];
             }
+
             char name[NAME_BUF_SIZE] = {0};
             regs_to_str(regs, 10, name, NAME_BUF_SIZE);
             strncpy(g_sys_cfg.slaves[s].name, name, NAME_BUF_SIZE - 1);
             g_sys_cfg.slaves[s].name[NAME_BUF_SIZE - 1] = '\0';
-            return;
         }
 
-        /* 数据点名称 */
+        /* 数据点名称: 同样检查重叠 */
         for (uint8_t p = 0; p < MAX_DATA_POINTS; p++) {
             uint16_t dp_name_base = SLAVE_DP_NAME_BASE(s, p);
-            if (start_addr >= dp_name_base && start_addr + count <= dp_name_base + 10) {
+            uint16_t dp_name_end  = dp_name_base + 10;
+            if (start_addr < dp_name_end && end_addr > dp_name_base) {
                 uint16_t regs[10] = {0};
-                uint16_t off = start_addr - dp_name_base;
-                for (uint16_t i = 0; i < count && (off + i) < 10; i++) {
-                    regs[off + i] = ((uint16_t)data[i * 2] << 8) | data[i * 2 + 1];
+                char name_copy[NAME_BUF_SIZE];
+                strncpy(name_copy, g_sys_cfg.slaves[s].data_points[p].name, NAME_BUF_SIZE - 1);
+                name_copy[NAME_BUF_SIZE - 1] = '\0';
+                uint8_t rc;
+                str_to_regs(name_copy, regs, &rc);
+
+                uint16_t overlap_start = (start_addr > dp_name_base) ? start_addr : dp_name_base;
+                uint16_t overlap_end   = (end_addr < dp_name_end) ? end_addr : dp_name_end;
+                for (uint16_t addr = overlap_start; addr < overlap_end; addr++) {
+                    uint16_t off = addr - dp_name_base;
+                    uint16_t data_off = addr - start_addr;
+                    regs[off] = ((uint16_t)data[data_off * 2] << 8) | data[data_off * 2 + 1];
                 }
+
                 char name[NAME_BUF_SIZE] = {0};
                 regs_to_str(regs, 10, name, NAME_BUF_SIZE);
                 strncpy(g_sys_cfg.slaves[s].data_points[p].name, name, NAME_BUF_SIZE - 1);
                 g_sys_cfg.slaves[s].data_points[p].name[NAME_BUF_SIZE - 1] = '\0';
-                return;
             }
         }
     }
@@ -882,7 +931,8 @@ void MB_Slave_Handle_Request(void)
     if (MB_CRC16(rx, rx_len - 2) != rx_crc) return;
 
     /* 地址匹配 */
-    if (rx[0] != g_sys_cfg.local_mb_addr && rx[0] != 0) return;
+    uint8_t is_broadcast = (rx[0] == 0);
+    if (rx[0] != g_sys_cfg.local_mb_addr && !is_broadcast) return;
 
     uint8_t fc = rx[1];
     uint16_t resp_len = 0;
@@ -931,10 +981,27 @@ void MB_Slave_Handle_Request(void)
             break;
         }
 
+        /* 第一遍: 写非名称寄存器 (跳过名称区域, 避免双重写入) */
         uint8_t write_ok = 1;
         for (uint16_t i = 0; i < reg_count; i++) {
+            uint16_t addr = start_addr + i;
             uint16_t value = ((uint16_t)rx[7 + i * 2] << 8) | rx[8 + i * 2];
-            if (!MB_Slave_Write_Reg(start_addr + i, value)) {
+
+            /* 检查是否为名称寄存器, 如果是则跳过, 留给 Commit_NameWrites 处理 */
+            uint8_t is_name_reg = 0;
+            for (uint8_t s = 0; s < MAX_SLAVE_COUNT && !is_name_reg; s++) {
+                if (addr >= SLAVE_NAME_BASE(s) && addr < SLAVE_NAME_BASE(s) + 10)
+                    is_name_reg = 1;
+                for (uint8_t p = 0; p < MAX_DATA_POINTS && !is_name_reg; p++) {
+                    if (addr >= SLAVE_DP_NAME_BASE(s, p) &&
+                        addr < SLAVE_DP_NAME_BASE(s, p) + 10)
+                        is_name_reg = 1;
+                }
+            }
+
+            if (is_name_reg) continue;  /* 名称寄存器由 Commit_NameWrites 统一处理 */
+
+            if (!MB_Slave_Write_Reg(addr, value)) {
                 write_ok = 0;
                 break;
             }
@@ -943,7 +1010,7 @@ void MB_Slave_Handle_Request(void)
         if (!write_ok) {
             resp_len = MB_Slave_Build_Exception(g_mb_slave.tx_buf, fc, MB_EX_ILLEGAL_DATA_ADDR);
         } else {
-            /* 提交名称寄存器的批量写入 */
+            /* 第二遍: 统一提交名称寄存器的批量写入 */
             MB_Slave_Commit_NameWrites(start_addr, reg_count, &rx[7]);
 
             resp_len = MB_Slave_Build_WriteMultiple(g_mb_slave.tx_buf, start_addr, reg_count);
@@ -957,7 +1024,7 @@ void MB_Slave_Handle_Request(void)
         break;
     }
 
-    if (resp_len > 0) {
+    if (resp_len > 0 && !is_broadcast) {
         MB_Slave_Send(resp_len);
     }
 }
@@ -995,6 +1062,10 @@ void MB_Slave_Process(void)
  */
 void MB_Switch_To_Slave(void)
 {
+    /* 冷却期检查: 防止主从快速抖动 */
+    if ((HAL_GetTick() - last_master_switch_tick) < MB_SLAVE_COOLDOWN_MS) {
+        return;
+    }
     g_run_mode = RUN_MODE_SLAVE;
     slave_enter_tick = HAL_GetTick();
     MB_Start_Slave_Receive();
@@ -1003,5 +1074,6 @@ void MB_Switch_To_Slave(void)
 void MB_Switch_To_Master(void)
 {
     g_run_mode = RUN_MODE_MASTER;
+    last_master_switch_tick = HAL_GetTick();
     MB_Start_Master_Receive();
 }

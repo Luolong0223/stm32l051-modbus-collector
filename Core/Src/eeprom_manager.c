@@ -3,8 +3,12 @@
  * @brief   STM32L051 内部 EEPROM 驱动 — 配置读写、校验、默认值 (v2.1)
  *
  *  v2.1: sprintf → snprintf 防溢出
+ *  v2.2: 添加变更检测，避免无意义写入；添加延迟保存支持
  */
 #include "eeprom_manager.h"
+
+/* 延迟保存标志 (在 modbus_driver.c 中定义) */
+extern volatile uint8_t g_eeprom_save_pending;
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  EEPROM 底层读写
@@ -84,6 +88,12 @@ void EEPROM_Load_Config(SystemCfg_t *cfg)
 
 void EEPROM_Save_Config(const SystemCfg_t *cfg)
 {
+    /* 变更检测: 先读取当前 EEPROM 内容，仅在数据变化时写入 */
+    static uint8_t read_buf[sizeof(SystemCfg_t)];
+    EEPROM_Read(EEPROM_CFG_OFFSET, read_buf, sizeof(SystemCfg_t));
+    if (memcmp(read_buf, cfg, sizeof(SystemCfg_t)) == 0) {
+        return;  /* 数据未变化，跳过写入以延长 EEPROM 寿命 */
+    }
     EEPROM_Write(EEPROM_CFG_OFFSET, (const uint8_t *)cfg, sizeof(SystemCfg_t));
 }
 
