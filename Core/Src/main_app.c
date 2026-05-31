@@ -184,10 +184,9 @@ void System_Init(void)
     /* 10. 初始化 RTC (低功耗唤醒定时器) */
     LowPower_RTC_Init();
 
-    /* 11. 初始化采集时间戳 */
-    uint32_t now = HAL_GetTick();
+    /* 11. 初始化采集时间戳 (last_poll_tick=0 用于检测"从未轮询"状态) */
     for (uint8_t i = 0; i < MAX_SLAVE_COUNT; i++) {
-        g_slave_data[i].last_poll_tick = now;
+        g_slave_data[i].last_poll_tick = 0;
         g_slave_data[i].online = 0;
     }
 }

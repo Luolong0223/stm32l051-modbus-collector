@@ -466,7 +466,8 @@ void MB_Master_Process(void)
             SlaveCfg_t *s = &g_sys_cfg.slaves[idx];
 
             if (!s->enabled || s->data_point_count == 0) continue;
-            if ((now - g_slave_data[idx].last_poll_tick) < s->poll_period_ms) continue;
+            if (g_slave_data[idx].last_poll_tick != 0 &&
+                (now - g_slave_data[idx].last_poll_tick) < s->poll_period_ms) continue;
 
             g_mb_master.current_slave = idx;
             g_mb_master.current_point = 0;
@@ -516,22 +517,26 @@ void MB_Master_Process(void)
             g_mb_master.current_point++;
             g_mb_master.retry_cnt = 0;
             if (g_mb_master.current_point >= s->data_point_count) {
-                /* 该从机所有数据点处理完毕, 更新轮询时间戳, 切换到下一从机 */
+                /* 该从机所有数据点处理完毕 (超时放弃), 切换到下一从机 */
+                uint8_t first_time = (g_slave_data[sidx].last_poll_tick == 0);
                 g_slave_data[sidx].last_poll_tick = now;
-                g_mb_master.current_slave = (sidx + 1) % g_sys_cfg.slave_count;
-                g_mb_master.state = MB_MASTER_IDLE;
 
-                /* 检测完整轮询周期: 找到下一个启用的从机, 如果编号更小说明绕了一圈 */
-                for (uint8_t i = 0; i < g_sys_cfg.slave_count; i++) {
-                    uint8_t idx = (g_mb_master.current_slave + i) % g_sys_cfg.slave_count;
-                    if (g_sys_cfg.slaves[idx].enabled &&
-                        g_sys_cfg.slaves[idx].data_point_count > 0) {
-                        if (idx < sidx) {
-                            g_slave_data[idx].poll_cycle_completed++;
-                        }
-                        break;
+                if (first_time) {
+                    g_mb_master.polled_slave_count++;
+                    uint8_t enabled_count = 0;
+                    for (uint8_t i = 0; i < g_sys_cfg.slave_count; i++) {
+                        if (g_sys_cfg.slaves[i].enabled &&
+                            g_sys_cfg.slaves[i].data_point_count > 0)
+                            enabled_count++;
+                    }
+                    if (g_mb_master.polled_slave_count >= enabled_count) {
+                        g_slave_data[sidx].poll_cycle_completed++;
+                        g_mb_master.polled_slave_count = 0;
                     }
                 }
+
+                g_mb_master.current_slave = (sidx + 1) % g_sys_cfg.slave_count;
+                g_mb_master.state = MB_MASTER_IDLE;
             } else {
                 /* 继续该从机的下一个数据点 */
                 DataPointCfg_t *pt = &s->data_points[g_mb_master.current_point];
@@ -568,21 +573,27 @@ void MB_Master_Process(void)
         g_mb_master.current_point++;
         g_mb_master.retry_cnt = 0;
         if (g_mb_master.current_point >= s->data_point_count) {
-            /* 该从机整轮采集完成, 更新轮询时间戳 */
+            /* 该从机整轮采集完成 */
+            /* 检测是否为该从机首次被轮询 (last_poll_tick==0 表示从未轮询过) */
+            uint8_t first_time = (g_slave_data[sidx].last_poll_tick == 0);
             g_slave_data[sidx].last_poll_tick = now;
-            g_mb_master.current_slave = (sidx + 1) % g_sys_cfg.slave_count;
 
-            /* 检测完整轮询周期: 找到下一个启用的从机, 如果编号更小说明绕了一圈 */
-            for (uint8_t i = 0; i < g_sys_cfg.slave_count; i++) {
-                uint8_t idx = (g_mb_master.current_slave + i) % g_sys_cfg.slave_count;
-                if (g_sys_cfg.slaves[idx].enabled &&
-                    g_sys_cfg.slaves[idx].data_point_count > 0) {
-                    if (idx < sidx) {
-                        g_slave_data[idx].poll_cycle_completed++;
-                    }
-                    break;
+            if (first_time) {
+                g_mb_master.polled_slave_count++;
+                /* 当所有启用从机都至少轮询过一次 → 一个完整周期完成 */
+                uint8_t enabled_count = 0;
+                for (uint8_t i = 0; i < g_sys_cfg.slave_count; i++) {
+                    if (g_sys_cfg.slaves[i].enabled &&
+                        g_sys_cfg.slaves[i].data_point_count > 0)
+                        enabled_count++;
+                }
+                if (g_mb_master.polled_slave_count >= enabled_count) {
+                    g_slave_data[sidx].poll_cycle_completed++;
+                    g_mb_master.polled_slave_count = 0;
                 }
             }
+
+            g_mb_master.current_slave = (sidx + 1) % g_sys_cfg.slave_count;
         }
         g_mb_master.state = MB_MASTER_IDLE;
         g_mb_master.frame_ready = 0;
@@ -1230,6 +1241,7 @@ void MB_Switch_To_Master(void)
     g_mb_master.current_slave = 0;
     g_mb_master.current_point = 0;
     g_mb_master.retry_cnt = 0;
+    g_mb_master.polled_slave_count = 0;
     /* 跳过未启用的从机 */
     for (uint8_t i = 0; i < g_sys_cfg.slave_count; i++) {
         if (g_sys_cfg.slaves[i].enabled && g_sys_cfg.slaves[i].data_point_count > 0) {

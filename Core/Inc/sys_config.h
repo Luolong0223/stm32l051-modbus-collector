@@ -185,6 +185,7 @@ typedef struct {
     /* 状态机 */
     uint32_t            wait_start_tick;
     uint32_t            tx_end_tick;            /* 最后一帧发送结束时刻 (帧间静默用) */
+    uint16_t            polled_slave_count;     /* 本轮已轮询过的启用从机数 */
     uint8_t             current_slave;
     uint8_t             current_point;
     uint8_t             retry_cnt;
