@@ -142,6 +142,9 @@ void EEPROM_Default_Config(SystemCfg_t *cfg)
     /* 默认设备名称 */
     strncpy(cfg->device_name, "Collector-1", NAME_MAX_LEN);
 
+    /* 默认休眠间隔: 0=禁用 */
+    cfg->sleep_interval_sec = 0;
+
     /* 默认从机1 */
     strncpy(cfg->slaves[0].name, "Slave-1", NAME_MAX_LEN);
     cfg->slaves[0].slave_addr       = 1;

@@ -127,7 +127,8 @@ typedef struct {
 
     /* --- 设备本体信息 --- */
     char        device_name[NAME_BUF_SIZE];   /* 设备名称 e.g. "3号线采集器" */
-    uint8_t     _pad_device[3];               /* 对齐 */
+    uint16_t    sleep_interval_sec;           /* 低功耗休眠间隔 (秒), 0=禁用 */
+    uint8_t     _pad_device[1];               /* 对齐 */
 
     /* --- 从机配置 --- */
     SlaveCfg_t  slaves[MAX_SLAVE_COUNT];
@@ -224,6 +225,7 @@ extern UART_HandleTypeDef huart1;
 extern UART_HandleTypeDef huart2;
 extern ADC_HandleTypeDef hadc;                      /* ADC 句柄 (CubeMX 生成) */
 extern volatile uint16_t g_adc_voltage_raw;         /* PA0 ADC 原始值 (0~4095) */
+extern volatile uint8_t  g_sleep_pending;           /* 低功耗休眠请求标志 */
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  默认配置

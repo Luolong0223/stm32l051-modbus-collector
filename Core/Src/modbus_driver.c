@@ -30,6 +30,7 @@ volatile uint8_t g_uart2_reconfig_pending = 0;  /* UART2 延迟重配标志 */
 volatile uint8_t g_uart1_reconfig_pending = 0;  /* UART1 延迟重配标志 */
 volatile uint8_t g_eeprom_save_pending = 0;     /* EEPROM 延迟保存标志 */
 volatile uint16_t g_adc_voltage_raw = 0;        /* PA0 ADC 原始值 (0~4095) */
+volatile uint8_t  g_sleep_pending = 0;          /* 低功耗休眠请求标志 */
 
 /* 逐字节接收临时缓冲 */
 static uint8_t master_rx_byte;
@@ -648,8 +649,11 @@ static uint16_t MB_Slave_Read_Reg(uint16_t reg_addr)
         return (uint16_t)(sec >> 16);
     }
 
-    /* ── 预留寄存器 0x0018~0x001F (只读, 返回 0) ── */
-    if (reg_addr >= 0x0018 && reg_addr <= 0x001F) return 0;
+    /* ── 低功耗休眠间隔 0x0018 (秒, 0=禁用) ── */
+    if (reg_addr == 0x0018) return g_sys_cfg.sleep_interval_sec;
+
+    /* ── 预留寄存器 0x0019~0x001F (只读, 返回 0) ── */
+    if (reg_addr >= 0x0019 && reg_addr <= 0x001F) return 0;
 
     /* ── 从机配置 + 数据点 ── */
     for (uint8_t s = 0; s < MAX_SLAVE_COUNT; s++) {
@@ -769,6 +773,12 @@ static uint8_t MB_Slave_Write_Reg(uint16_t reg_addr, uint16_t value)
         strncpy(g_sys_cfg.device_name, new_name, NAME_BUF_SIZE - 1);
         g_sys_cfg.device_name[NAME_BUF_SIZE - 1] = '\0';
         EEPROM_Filter_Name(g_sys_cfg.device_name);
+        return 1;
+    }
+
+    /* ── 低功耗休眠间隔 0x0018 ── */
+    if (reg_addr == 0x0018) {
+        g_sys_cfg.sleep_interval_sec = value;  /* 0=禁用, 最大65535秒 */
         return 1;
     }
 

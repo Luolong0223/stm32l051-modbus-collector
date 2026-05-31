@@ -10,6 +10,8 @@
 #include "report_manager.h"
 #include "modbus_driver.h"
 
+extern volatile uint8_t g_sleep_pending;
+
 static char report_buf[REPORT_BUF_SIZE];
 
 /* HEX 格式临时缓冲 (避免在栈上分配 256 字节) */
@@ -320,5 +322,9 @@ void REPORT_Process(void)
         default:                 len = format_json(report_buf, REPORT_BUF_SIZE); break;
     }
 
-    if (len > 0) REPORT_Send(report_buf, len);
+    if (len > 0) {
+        REPORT_Send(report_buf, len);
+        /* 上报完成，标记可进入低功耗 (由 main_app.c 检查) */
+        g_sleep_pending = 1;
+    }
 }
