@@ -310,6 +310,20 @@ void REPORT_Process(void)
     /* 无启用从机时跳过上报 */
     if (!has_enabled) return;
 
+    /* 未完成至少一个完整轮询周期时跳过上报 (确保所有从机数据已采集) */
+    {
+        uint8_t cycle_done = 0;
+        for (uint8_t s = 0; s < g_sys_cfg.slave_count; s++) {
+            if (g_sys_cfg.slaves[s].enabled &&
+                g_sys_cfg.slaves[s].data_point_count > 0 &&
+                g_slave_data[s].poll_cycle_completed > 0) {
+                cycle_done = 1;
+                break;
+            }
+        }
+        if (!cycle_done) return;
+    }
+
     /* 未到上报间隔时跳过 */
     if ((now - last_report_tick) < min_period) return;
     last_report_tick = now;

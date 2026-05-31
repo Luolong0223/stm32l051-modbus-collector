@@ -520,6 +520,18 @@ void MB_Master_Process(void)
                 g_slave_data[sidx].last_poll_tick = now;
                 g_mb_master.current_slave = (sidx + 1) % g_sys_cfg.slave_count;
                 g_mb_master.state = MB_MASTER_IDLE;
+
+                /* 检测完整轮询周期: 找到下一个启用的从机, 如果编号更小说明绕了一圈 */
+                for (uint8_t i = 0; i < g_sys_cfg.slave_count; i++) {
+                    uint8_t idx = (g_mb_master.current_slave + i) % g_sys_cfg.slave_count;
+                    if (g_sys_cfg.slaves[idx].enabled &&
+                        g_sys_cfg.slaves[idx].data_point_count > 0) {
+                        if (idx < sidx) {
+                            g_slave_data[idx].poll_cycle_completed++;
+                        }
+                        break;
+                    }
+                }
             } else {
                 /* 继续该从机的下一个数据点 */
                 DataPointCfg_t *pt = &s->data_points[g_mb_master.current_point];
@@ -559,6 +571,18 @@ void MB_Master_Process(void)
             /* 该从机整轮采集完成, 更新轮询时间戳 */
             g_slave_data[sidx].last_poll_tick = now;
             g_mb_master.current_slave = (sidx + 1) % g_sys_cfg.slave_count;
+
+            /* 检测完整轮询周期: 找到下一个启用的从机, 如果编号更小说明绕了一圈 */
+            for (uint8_t i = 0; i < g_sys_cfg.slave_count; i++) {
+                uint8_t idx = (g_mb_master.current_slave + i) % g_sys_cfg.slave_count;
+                if (g_sys_cfg.slaves[idx].enabled &&
+                    g_sys_cfg.slaves[idx].data_point_count > 0) {
+                    if (idx < sidx) {
+                        g_slave_data[idx].poll_cycle_completed++;
+                    }
+                    break;
+                }
+            }
         }
         g_mb_master.state = MB_MASTER_IDLE;
         g_mb_master.frame_ready = 0;

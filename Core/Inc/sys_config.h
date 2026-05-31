@@ -150,6 +150,7 @@ typedef struct {
     float       values[MAX_DATA_POINTS];    /* 解析后的浮点值 */
     uint8_t     valid[MAX_DATA_POINTS];     /* 该点数据是否有效 */
     uint32_t    last_poll_tick;             /* 上次轮询时刻 */
+    uint32_t    poll_cycle_completed;       /* 已完成的完整轮询周期数 (仅主站) */
     uint8_t     error_count;                /* 连续通信错误计数 */
     uint8_t     online;                     /* 设备在线 */
     uint16_t    _pad;
