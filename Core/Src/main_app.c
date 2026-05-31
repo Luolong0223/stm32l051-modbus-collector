@@ -114,7 +114,7 @@ void System_Init(void)
     }
 
     /* 9. ADC 校准 + 首次电压采集 */
-    HAL_ADCEx_Calibration_Start(&hadc);
+    HAL_ADCEx_Calibration_Start(&hadc, ADC_SINGLE_ENDED);
     ADC_Read_Voltage();
 
     /* 10. 初始化采集时间戳 */
