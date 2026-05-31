@@ -116,9 +116,9 @@ typedef struct {
     uint32_t    config_version;
 } SystemCfg_t;
 
-/* 编译期结构体大小校验，防止不同编译器对齐差异导致 EEPROM 数据不兼容 */
-_Static_assert(sizeof(DataPointCfg_t) == 28, "DataPointCfg_t size mismatch");
-_Static_assert(sizeof(SlaveCfg_t) == 264, "SlaveCfg_t size mismatch");
+/* 编译期结构体大小校验 (兼容 ARMCC v5 / C99) */
+typedef char _assert_DataPointCfg[(sizeof(DataPointCfg_t) == 28) ? 1 : -1];
+typedef char _assert_SlaveCfg[(sizeof(SlaveCfg_t) == 264) ? 1 : -1];
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  运行时采集结果
