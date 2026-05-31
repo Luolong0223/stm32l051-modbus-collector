@@ -139,6 +139,8 @@ modbus_driver.c 已实现 `HAL_UART_RxCpltCallback`，确保 CubeMX 生成代码
 | 0x0008 | report_format | RW | 0=TEXT 1=JSON 2=HEX |
 | 0x0009 | uart1_baudrate_lo | RW | UART1 波特率低 16 位 |
 | 0x000A | uart1_baudrate_hi | RW | 高 16 位，**写入立即生效** |
+| 0x000B~0x0014 | device_name[10] | RW | **设备名称**（10 个寄存器 = 20 字节） |
+| 0x0015 | voltage_adc_raw | R | **PA0 电压 ADC 原始值** (0~4095, 只读) |
 
 ### 从机 N 配置（基地址 = 0x0100 + N × 0x0200，N = 0~4）
 
@@ -164,17 +166,17 @@ modbus_driver.c 已实现 `HAL_UART_RxCpltCallback`，确保 CubeMX 生成代码
 
 ### TEXT
 ```
-"1号温湿度",P1("温度")=23.50,P2("湿度")=65.00;"2号压力",P1("压力")=101.32;OFFLINE
+"3号线采集器",电压=3300mV;"1号温湿度",P1("温度")=23.50,P2("湿度")=65.00;"2号压力",P1("压力")=101.32;OFFLINE
 ```
 
 ### JSON
 ```json
-{"s1":{"name":"1号温湿度","online":1,"data":{"温度":23.5,"湿度":65.0}},"s2":{"name":"2号压力","online":1,"data":{"压力":101.32}}}
+{"device":{"name":"3号线采集器","voltage_mv":3300},"s1":{"name":"1号温湿度","online":1,"data":{"温度":23.5,"湿度":65.0}},"s2":{"name":"2号压力","online":1,"data":{"压力":101.32}}}
 ```
 
 ### HEX
 ```
-AA 55 02 01 01 02 00 00 BC 41 00 00 82 42 02 01 01 00 00 CA 42 [CRC_L] [CRC_H]
+AA 55 02 [设备名称20字节] [电压ADC_H] [电压ADC_L] 01 01 02 00 00 BC 41 00 00 82 42 02 01 01 00 00 CA 42 [CRC_L] [CRC_H]
 ```
 
 ## 注意事项

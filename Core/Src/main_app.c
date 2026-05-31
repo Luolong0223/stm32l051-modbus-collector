@@ -56,6 +56,20 @@ static void Mode_Select_GPIO_Init(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ *  ADC 电压采集 (PA0)
+ *  CubeMX 已配置 ADC，句柄为 hadc
+ *  读取单次转换结果，存入 g_adc_voltage_raw
+ * ═══════════════════════════════════════════════════════════════════════════ */
+static void ADC_Read_Voltage(void)
+{
+    HAL_ADC_Start(&hadc);
+    if (HAL_ADC_PollForConversion(&hadc, 10) == HAL_OK) {
+        g_adc_voltage_raw = (uint16_t)HAL_ADC_GetValue(&hadc);
+    }
+    HAL_ADC_Stop(&hadc);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
  *  UART2 空闲中断使能
  * ═══════════════════════════════════════════════════════════════════════════ */
 static void UART2_Enable_Idle_IRQ(void)
@@ -99,7 +113,11 @@ void System_Init(void)
         MB_Switch_To_Master();
     }
 
-    /* 9. 初始化采集时间戳 */
+    /* 9. ADC 校准 + 首次电压采集 */
+    HAL_ADCEx_Calibration_Start(&hadc);
+    ADC_Read_Voltage();
+
+    /* 10. 初始化采集时间戳 */
     uint32_t now = HAL_GetTick();
     for (uint8_t i = 0; i < MAX_SLAVE_COUNT; i++) {
         g_slave_data[i].last_poll_tick = now;
@@ -131,6 +149,9 @@ void System_MainLoop(void)
 
     /* 3. 帧超时检测 */
     MB_Check_Frame_Timeout();
+
+    /* 3.5 周期性读取电压 (每次主循环都采样，约几十us) */
+    ADC_Read_Voltage();
 
     /* 4. 根据当前模式执行对应任务 */
     if (g_run_mode == RUN_MODE_SLAVE) {

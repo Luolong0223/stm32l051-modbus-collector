@@ -77,6 +77,18 @@ static uint16_t format_text(char *buf, uint16_t buf_size)
     char *p = buf;
     char *end = buf + buf_size - 4;
 
+    /* 设备信息头: "设备名称",电压=3300mV; */
+    *p++ = '"';
+    p = safe_cat(p, end, g_sys_cfg.device_name[0] ? g_sys_cfg.device_name : "N/A");
+    *p++ = '"';
+    *p++ = ',';
+    p = safe_cat(p, end, "电压=");
+    /* ADC 原始值 → mV: Vref=3.3V, 12bit → raw * 3300 / 4096 */
+    uint32_t mv = ((uint32_t)g_adc_voltage_raw * 3300 + 2048) / 4096;
+    p += ftostr((float)mv, p, 0);
+    p = safe_cat(p, end, "mV");
+    *p++ = ';';
+
     for (uint8_t s = 0; s < g_sys_cfg.slave_count && p < end; s++) {
         SlaveCfg_t *cfg = &g_sys_cfg.slaves[s];
         SlaveData_t *data = &g_slave_data[s];
@@ -124,6 +136,16 @@ static uint16_t format_json(char *buf, uint16_t buf_size)
     char *end = buf + buf_size - 4;
 
     *p++ = '{';
+
+    /* 设备信息: "device":{"name":"xxx","voltage_mv":3300} */
+    p = safe_cat(p, end, "\"device\":{\"name\":\"");
+    p = safe_cat(p, end, g_sys_cfg.device_name[0] ? g_sys_cfg.device_name : "");
+    p = safe_cat(p, end, "\",\"voltage_mv\":");
+    {
+        uint32_t mv = ((uint32_t)g_adc_voltage_raw * 3300 + 2048) / 4096;
+        p += snprintf(p, (uint32_t)(end - p), "%lu", (unsigned long)mv);
+    }
+    p = safe_cat(p, end, "},");
 
     for (uint8_t s = 0; s < g_sys_cfg.slave_count && p < end; s++) {
         SlaveCfg_t *cfg = &g_sys_cfg.slaves[s];
@@ -182,6 +204,15 @@ static uint16_t format_hex(char *buf, uint16_t buf_size)
     hex_tmp[pos++] = 0xAA;
     hex_tmp[pos++] = 0x55;
     hex_tmp[pos++] = g_sys_cfg.slave_count;
+
+    /* 设备名称 (20字节, 不足补0) */
+    for (uint8_t i = 0; i < NAME_MAX_LEN; i++) {
+        hex_tmp[pos++] = (i < strlen(g_sys_cfg.device_name)) ?
+                          (uint8_t)g_sys_cfg.device_name[i] : 0;
+    }
+    /* 电压 ADC 原始值 (2字节大端) */
+    hex_tmp[pos++] = (uint8_t)(g_adc_voltage_raw >> 8);
+    hex_tmp[pos++] = (uint8_t)(g_adc_voltage_raw & 0xFF);
 
     for (uint8_t s = 0; s < g_sys_cfg.slave_count && pos + 40 < sizeof(hex_tmp); s++) {
         SlaveCfg_t *cfg = &g_sys_cfg.slaves[s];

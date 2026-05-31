@@ -125,6 +125,10 @@ typedef struct {
     uint8_t     _reserved0;
     uint32_t    uart1_baudrate;
 
+    /* --- 设备本体信息 --- */
+    char        device_name[NAME_BUF_SIZE];   /* 设备名称 e.g. "3号线采集器" */
+    uint8_t     _pad_device[3];               /* 对齐 */
+
     /* --- 从机配置 --- */
     SlaveCfg_t  slaves[MAX_SLAVE_COUNT];
 
@@ -218,6 +222,8 @@ extern volatile uint8_t g_uart1_reconfig_pending;   /* UART1 延迟重配标志 
 extern volatile uint8_t g_eeprom_save_pending;      /* EEPROM 延迟保存标志 */
 extern UART_HandleTypeDef huart1;
 extern UART_HandleTypeDef huart2;
+extern ADC_HandleTypeDef hadc;                      /* ADC 句柄 (CubeMX 生成) */
+extern volatile uint16_t g_adc_voltage_raw;         /* PA0 ADC 原始值 (0~4095) */
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  默认配置

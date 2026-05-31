@@ -65,6 +65,7 @@ void EEPROM_Load_Config(SystemCfg_t *cfg)
     }
 
     /* 名称字段过滤 (清除不可打印字符) */
+    EEPROM_Filter_Name(cfg->device_name);
     for (uint8_t i = 0; i < MAX_SLAVE_COUNT; i++) {
         EEPROM_Filter_Name(cfg->slaves[i].name);
         for (uint8_t j = 0; j < MAX_DATA_POINTS; j++) {
@@ -137,6 +138,9 @@ void EEPROM_Default_Config(SystemCfg_t *cfg)
     cfg->report_format      = CFG_DEFAULT_REPORT_FMT;
     cfg->uart1_baudrate     = CFG_DEFAULT_BAUDRATE;
     cfg->config_version     = CFG_VERSION;
+
+    /* 默认设备名称 */
+    strncpy(cfg->device_name, "Collector-1", NAME_MAX_LEN);
 
     /* 默认从机1 */
     strncpy(cfg->slaves[0].name, "Slave-1", NAME_MAX_LEN);

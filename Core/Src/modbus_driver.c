@@ -29,6 +29,7 @@ RunMode_t        g_run_mode = RUN_MODE_MASTER;
 volatile uint8_t g_uart2_reconfig_pending = 0;  /* UART2 延迟重配标志 */
 volatile uint8_t g_uart1_reconfig_pending = 0;  /* UART1 延迟重配标志 */
 volatile uint8_t g_eeprom_save_pending = 0;     /* EEPROM 延迟保存标志 */
+volatile uint16_t g_adc_voltage_raw = 0;        /* PA0 ADC 原始值 (0~4095) */
 
 /* 逐字节接收临时缓冲 */
 static uint8_t master_rx_byte;
@@ -621,6 +622,22 @@ static uint16_t MB_Slave_Read_Reg(uint16_t reg_addr)
         case 0x000A: return (uint16_t)(g_sys_cfg.uart1_baudrate >> 16);
     }
 
+    /* ── 设备名称寄存器 0x000B~0x0014 (10个=20字节) ── */
+    if (reg_addr >= 0x000B && reg_addr < 0x000B + 10) {
+        uint16_t offset = reg_addr - 0x000B;
+        uint16_t regs[10];
+        char name_copy[NAME_BUF_SIZE];
+        strncpy(name_copy, g_sys_cfg.device_name, NAME_BUF_SIZE - 1);
+        name_copy[NAME_BUF_SIZE - 1] = '\0';
+        uint8_t rc;
+        str_to_regs(name_copy, regs, &rc);
+        if (offset < rc) return regs[offset];
+        return 0;
+    }
+
+    /* ── 电压 ADC 原始值 0x0015 ── */
+    if (reg_addr == 0x0015) return g_adc_voltage_raw;
+
     /* ── 从机配置 + 数据点 ── */
     for (uint8_t s = 0; s < MAX_SLAVE_COUNT; s++) {
         uint16_t base = SLAVE_CFG_BASE(s);
@@ -724,6 +741,27 @@ static uint8_t MB_Slave_Write_Reg(uint16_t reg_addr, uint16_t value)
             return 1;
     }
 
+    /* ── 设备名称寄存器 0x000B~0x0014 (单寄存器写入) ── */
+    if (reg_addr >= 0x000B && reg_addr < 0x000B + 10) {
+        uint16_t offset = reg_addr - 0x000B;
+        uint16_t regs[10] = {0};
+        char name_copy[NAME_BUF_SIZE];
+        strncpy(name_copy, g_sys_cfg.device_name, NAME_BUF_SIZE - 1);
+        name_copy[NAME_BUF_SIZE - 1] = '\0';
+        uint8_t rc;
+        str_to_regs(name_copy, regs, &rc);
+        regs[offset] = value;
+        char new_name[NAME_BUF_SIZE] = {0};
+        regs_to_str(regs, 10, new_name, NAME_BUF_SIZE);
+        strncpy(g_sys_cfg.device_name, new_name, NAME_BUF_SIZE - 1);
+        g_sys_cfg.device_name[NAME_BUF_SIZE - 1] = '\0';
+        EEPROM_Filter_Name(g_sys_cfg.device_name);
+        return 1;
+    }
+
+    /* ── 电压 ADC 只读，写入返回非法地址 ── */
+    if (reg_addr == 0x0015) return 0;
+
     /* ── 从机配置 ── */
     for (uint8_t s = 0; s < MAX_SLAVE_COUNT; s++) {
         uint16_t base = SLAVE_CFG_BASE(s);
@@ -824,6 +862,34 @@ static void MB_Slave_Commit_NameWrites(uint16_t start_addr, uint16_t count,
                                         const uint8_t *data)
 {
     uint16_t end_addr = start_addr + count;
+
+    /* ── 设备名称 (0x000B~0x0014) ── */
+    {
+        uint16_t dn_base = 0x000B;
+        uint16_t dn_end  = dn_base + 10;
+        if (start_addr < dn_end && end_addr > dn_base) {
+            uint16_t regs[10] = {0};
+            char name_copy[NAME_BUF_SIZE];
+            strncpy(name_copy, g_sys_cfg.device_name, NAME_BUF_SIZE - 1);
+            name_copy[NAME_BUF_SIZE - 1] = '\0';
+            uint8_t rc;
+            str_to_regs(name_copy, regs, &rc);
+
+            uint16_t overlap_start = (start_addr > dn_base) ? start_addr : dn_base;
+            uint16_t overlap_end   = (end_addr < dn_end) ? end_addr : dn_end;
+            for (uint16_t addr = overlap_start; addr < overlap_end; addr++) {
+                uint16_t off = addr - dn_base;
+                uint16_t data_off = addr - start_addr;
+                regs[off] = ((uint16_t)data[data_off * 2] << 8) | data[data_off * 2 + 1];
+            }
+
+            char name[NAME_BUF_SIZE] = {0};
+            regs_to_str(regs, 10, name, NAME_BUF_SIZE);
+            strncpy(g_sys_cfg.device_name, name, NAME_BUF_SIZE - 1);
+            g_sys_cfg.device_name[NAME_BUF_SIZE - 1] = '\0';
+            EEPROM_Filter_Name(g_sys_cfg.device_name);
+        }
+    }
 
     for (uint8_t s = 0; s < MAX_SLAVE_COUNT; s++) {
         /* 设备名称: 检查写入范围与名称区域是否有重叠 */
