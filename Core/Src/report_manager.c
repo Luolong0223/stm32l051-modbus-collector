@@ -28,7 +28,15 @@ static uint16_t ftostr(float val, char *buf, uint8_t decimals)
     if (val < 0) { *p++ = '-'; val = -val; }
 
     uint32_t int_part = (uint32_t)val;
+
+    /* 用整数运算处理小数部分, 避免浮点累积精度误差 */
+    uint32_t frac_int = 0;
+    uint32_t frac_div = 1;
+    for (uint8_t i = 0; i < decimals; i++) frac_div *= 10;
     float frac = val - (float)int_part;
+    frac_int = (uint32_t)(frac * (float)frac_div + 0.5f);
+    /* 进位处理: 如 0.9995 * 1000 + 0.5 ≈ 1000 */
+    if (frac_int >= frac_div) { int_part++; frac_int -= frac_div; }
 
     /* 整数部分 */
     char tmp[12];
@@ -38,15 +46,14 @@ static uint16_t ftostr(float val, char *buf, uint8_t decimals)
     for (uint8_t i = 0; i < len; i++) p[i] = tmp[len - 1 - i];
     p += len;
 
-    /* 小数部分 (rounding) */
+    /* 小数部分 (纯整数运算, 无累积误差) */
     if (decimals > 0) {
         *p++ = '.';
+        uint32_t divisor = frac_div / 10;
         for (uint8_t i = 0; i < decimals; i++) {
-            frac *= 10.0f;
-            uint8_t digit = (uint8_t)(frac + 0.5f);  /* 四舍五入 */
-            if (digit > 9) digit = 9;
-            *p++ = '0' + digit;
-            frac -= (float)(uint8_t)frac;
+            *p++ = '0' + (uint8_t)(frac_int / divisor);
+            frac_int %= divisor;
+            divisor /= 10;
         }
     }
     *p = '\0';
@@ -187,9 +194,10 @@ static uint16_t format_hex(char *buf, uint16_t buf_size)
         for (uint8_t pt = 0; pt < cfg->data_point_count && pos + 5 < sizeof(hex_tmp); pt++) {
             float fval = data->valid[pt] ? data->values[pt] : 0.0f;
             uint8_t fb[4];
-            memcpy(fb, &fval, 4);  /* 安全 type-punning */
-            hex_tmp[pos++] = fb[0]; hex_tmp[pos++] = fb[1];
-            hex_tmp[pos++] = fb[2]; hex_tmp[pos++] = fb[3];
+            memcpy(fb, &fval, 4);  /* 安全 type-punning (本地小端) */
+            /* 输出大端序 (MSB first), 与 README 示例一致 */
+            hex_tmp[pos++] = fb[3]; hex_tmp[pos++] = fb[2];
+            hex_tmp[pos++] = fb[1]; hex_tmp[pos++] = fb[0];
         }
     }
 

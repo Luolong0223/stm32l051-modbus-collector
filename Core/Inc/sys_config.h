@@ -2,7 +2,7 @@
  * @file    sys_config.h
  * @brief   系统全局配置定义 — 寄存器映射、EEPROM布局、数据结构
  * @note    STM32L051K8 | UART2=Modbus RTU | UART1=数据上报 | 内部EEPROM存储
- * @version 2.1 — 修复全局变量重复定义、增加结构体大小校验、增加从站超时
+ * @version 2.2 — 修复全局变量重复定义、增加结构体大小校验、增加从站超时、延迟保存
  */
 #ifndef __SYS_CONFIG_H
 #define __SYS_CONFIG_H
@@ -12,6 +12,12 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  硬件常量
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#define EEPROM_BASE_ADDR        0x08080000  /* STM32L051 内部 EEPROM 基地址 */
+#define EEPROM_SIZE             2048        /* 2KB */
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  系统限制常量
@@ -101,7 +107,7 @@ typedef struct {
     char            name[NAME_BUF_SIZE];            /* 设备名称 e.g. "1号温湿度" */
     uint8_t         _pad[3];                        /* 对齐 */
     DataPointCfg_t  data_points[MAX_DATA_POINTS];   /* 数据点配置 */
-} SlaveCfg_t;   /* sizeof = 256 (GCC -O0, ARM32 4-byte align) */
+} SlaveCfg_t;   /* sizeof = 256 (32 + 8×28, GCC -O0, ARM32 4-byte align) */
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  系统配置 (存入 EEPROM, 总计约 1352 字节 < 2048)
@@ -208,6 +214,7 @@ extern MBMasterHandle_t g_mb_master;
 extern MBSlaveHandle_t  g_mb_slave;
 extern RunMode_t        g_run_mode;
 extern volatile uint8_t g_uart2_reconfig_pending;   /* UART2 延迟重配标志 */
+extern volatile uint8_t g_uart1_reconfig_pending;   /* UART1 延迟重配标志 */
 extern volatile uint8_t g_eeprom_save_pending;      /* EEPROM 延迟保存标志 */
 extern UART_HandleTypeDef huart1;
 extern UART_HandleTypeDef huart2;

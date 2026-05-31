@@ -3,7 +3,7 @@
  * @brief   STM32L051 内部 EEPROM 驱动 — 配置读写、校验、默认值 (v2.1)
  *
  *  v2.1: sprintf → snprintf 防溢出
- *  v2.2: 添加变更检测，避免无意义写入；添加延迟保存支持
+ *  v2.2: 变更检测 + 延迟保存 + 名称过滤 + 线程安全修复
  */
 #include "eeprom_manager.h"
 
@@ -60,7 +60,16 @@ void EEPROM_Load_Config(SystemCfg_t *cfg)
     if (!EEPROM_Config_Is_Valid(cfg)) {
         /* EEPROM 中无有效配置 → 写入默认值 */
         EEPROM_Default_Config(cfg);
-        EEPROM_Save_Config(cfg);
+        /* 立即保存默认配置 (启动阶段无中断竞争) */
+        EEPROM_Write(EEPROM_CFG_OFFSET, (const uint8_t *)cfg, sizeof(SystemCfg_t));
+    }
+
+    /* 名称字段过滤 (清除不可打印字符) */
+    for (uint8_t i = 0; i < MAX_SLAVE_COUNT; i++) {
+        EEPROM_Filter_Name(cfg->slaves[i].name);
+        for (uint8_t j = 0; j < MAX_DATA_POINTS; j++) {
+            EEPROM_Filter_Name(cfg->slaves[i].data_points[j].name);
+        }
     }
 
     /* 参数限幅 */
@@ -89,12 +98,29 @@ void EEPROM_Load_Config(SystemCfg_t *cfg)
 void EEPROM_Save_Config(const SystemCfg_t *cfg)
 {
     /* 变更检测: 先读取当前 EEPROM 内容，仅在数据变化时写入 */
-    static uint8_t read_buf[sizeof(SystemCfg_t)];
+    uint8_t read_buf[sizeof(SystemCfg_t)];  /* 栈局部变量，避免中断/主循环竞争 */
     EEPROM_Read(EEPROM_CFG_OFFSET, read_buf, sizeof(SystemCfg_t));
     if (memcmp(read_buf, cfg, sizeof(SystemCfg_t)) == 0) {
         return;  /* 数据未变化，跳过写入以延长 EEPROM 寿命 */
     }
     EEPROM_Write(EEPROM_CFG_OFFSET, (const uint8_t *)cfg, sizeof(SystemCfg_t));
+}
+
+/**
+ * @brief  过滤名称字段: 移除不可打印字符, 确保以 \0 结尾
+ */
+void EEPROM_Filter_Name(char *name)
+{
+    uint8_t dst = 0;
+    for (uint8_t src = 0; src < NAME_MAX_LEN && name[src] != '\0'; src++) {
+        char c = name[src];
+        /* 保留可打印字符 (0x20~0x7E) 和常见高字节 (GBK/UTF-8 首字节 0x80~0xFF) */
+        if ((uint8_t)c >= 0x20 || (uint8_t)c >= 0x80) {
+            name[dst++] = c;
+        }
+        /* 跳过控制字符 (\0 已被循环条件排除) */
+    }
+    name[dst] = '\0';
 }
 
 void EEPROM_Default_Config(SystemCfg_t *cfg)

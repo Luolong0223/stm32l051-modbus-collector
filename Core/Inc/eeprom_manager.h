@@ -7,9 +7,7 @@
 
 #include "sys_config.h"
 
-/* STM32L051 内部 EEPROM 基地址 & 大小 */
-#define EEPROM_BASE_ADDR        0x08080000
-#define EEPROM_SIZE             2048    /* 2KB */
+/* EEPROM 基地址 & 大小已移至 sys_config.h (供 _Static_assert 使用) */
 
 /* 配置存储起始地址 (EEPROM 偏移) */
 #define EEPROM_CFG_OFFSET       0x0000
@@ -27,5 +25,6 @@ void     EEPROM_Load_Config(SystemCfg_t *cfg);
 void     EEPROM_Save_Config(const SystemCfg_t *cfg);
 void     EEPROM_Default_Config(SystemCfg_t *cfg);
 uint8_t  EEPROM_Config_Is_Valid(const SystemCfg_t *cfg);
+void     EEPROM_Filter_Name(char *name);
 
 #endif /* __EEPROM_MANAGER_H */

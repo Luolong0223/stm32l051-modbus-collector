@@ -8,6 +8,14 @@
  *    - 修复: 删除 MB_UART_Idle_Callback 中的调试代码
  *    - 修复: 名称寄存器单写(0x06)支持
  *    - 优化: sprintf → snprintf 防溢出
+ *  v2.2 改进:
+ *    - 修复: delay_us SysTick 翻转处理
+ *    - 修复: 主站超时后立即尝试下一数据点 (不再跳过)
+ *    - 修复: UART1 波特率热更新改为延迟执行
+ *    - 修复: EEPROM 保存延迟至主站 IDLE 时执行
+ *    - 新增: 从站支持 0x04 (读输入寄存器)
+ *    - 新增: 名称字段写入时自动过滤不可打印字符
+ *    - 新增: 模式切换时跳过未启用从机
  */
 #include "modbus_driver.h"
 #include "eeprom_manager.h"
@@ -19,6 +27,7 @@ MBMasterHandle_t g_mb_master;
 MBSlaveHandle_t  g_mb_slave;
 RunMode_t        g_run_mode = RUN_MODE_MASTER;
 volatile uint8_t g_uart2_reconfig_pending = 0;  /* UART2 延迟重配标志 */
+volatile uint8_t g_uart1_reconfig_pending = 0;  /* UART1 延迟重配标志 */
 volatile uint8_t g_eeprom_save_pending = 0;     /* EEPROM 延迟保存标志 */
 
 /* 逐字节接收临时缓冲 */
@@ -78,9 +87,15 @@ uint16_t MB_CRC16(const uint8_t *buf, uint16_t len)
 static void delay_us(uint32_t us)
 {
     uint32_t ticks = (SystemCoreClock / 1000000) * us;
+    if (ticks == 0) return;
     uint32_t start = SysTick->VAL;
-    uint32_t load  = SysTick->LOAD;
-    while (((start - SysTick->VAL) & load) < ticks) { }
+    uint32_t load  = SysTick->LOAD + 1;  /* LOAD 是重装值，周期 = LOAD+1 */
+    for (;;) {
+        uint32_t now = SysTick->VAL;
+        /* SysTick 是递减计数器，处理翻转: (start - now) 可能溢出，用模运算修正 */
+        uint32_t elapsed = (start >= now) ? (start - now) : (load - (now - start));
+        if (elapsed >= ticks) break;
+    }
 }
 
 void RS485_TX_Enable(void)
@@ -422,10 +437,21 @@ void MB_Master_Process(void)
 
     /* ─── IDLE: 检查是否需要轮询 ─── */
     case MB_MASTER_IDLE: {
-        /* 延迟重配: 主站空闲时安全执行 UART2 重配 */
+        /* 延迟重配: 主站空闲时安全执行 UART 重配 */
         if (g_uart2_reconfig_pending) {
             g_uart2_reconfig_pending = 0;
             MB_Reconfigure_UART();
+        }
+        if (g_uart1_reconfig_pending) {
+            g_uart1_reconfig_pending = 0;
+            HAL_UART_AbortReceive(&huart1);
+            huart1.Init.BaudRate = g_sys_cfg.uart1_baudrate;
+            HAL_UART_Init(&huart1);
+        }
+        /* 延迟保存: 主站空闲时安全写入 EEPROM */
+        if (g_eeprom_save_pending) {
+            g_eeprom_save_pending = 0;
+            EEPROM_Save_Config(&g_sys_cfg);
         }
 
         for (uint8_t i = 0; i < g_sys_cfg.slave_count; i++) {
@@ -438,7 +464,7 @@ void MB_Master_Process(void)
             g_mb_master.current_slave = idx;
             g_mb_master.current_point = 0;
             g_mb_master.retry_cnt = 0;
-            g_slave_data[idx].last_poll_tick = now;
+            /* last_poll_tick 延迟到整轮采集完成后再更新，避免超时导致跳过后续数据点 */
 
             DataPointCfg_t *pt = &s->data_points[0];
             uint8_t need_regs = (pt->data_type <= DATA_TYPE_I16) ? 1 : 2;
@@ -472,19 +498,30 @@ void MB_Master_Process(void)
                 return;
             }
 
-            /* 重试耗尽, 标记错误并跳到下一个数据点 */
+            /* 重试耗尽, 标记当前数据点错误 */
             g_slave_data[sidx].error_count++;
+            g_slave_data[sidx].valid[g_mb_master.current_point] = 0;
             if (g_slave_data[sidx].error_count >= 3) {
                 g_slave_data[sidx].online = 0;
-                for (uint8_t p = 0; p < MAX_DATA_POINTS; p++)
-                    g_slave_data[sidx].valid[p] = 0;
             }
-            /* 下一个数据点 */
+
+            /* 立即尝试下一个数据点 (不等待下一轮轮询周期) */
             g_mb_master.current_point++;
+            g_mb_master.retry_cnt = 0;
             if (g_mb_master.current_point >= s->data_point_count) {
+                /* 该从机所有数据点处理完毕, 更新轮询时间戳, 切换到下一从机 */
+                g_slave_data[sidx].last_poll_tick = now;
                 g_mb_master.current_slave = (sidx + 1) % g_sys_cfg.slave_count;
+                g_mb_master.state = MB_MASTER_IDLE;
+            } else {
+                /* 继续该从机的下一个数据点 */
+                DataPointCfg_t *pt = &s->data_points[g_mb_master.current_point];
+                uint8_t need_regs = (pt->data_type <= DATA_TYPE_I16) ? 1 : 2;
+                uint16_t frame_len = MB_Master_Build_ReadHolding(
+                    g_mb_master.tx_buf, s->slave_addr, pt->reg_addr, need_regs);
+                MB_Master_Send(frame_len);
+                g_mb_master.wait_start_tick = now;
             }
-            g_mb_master.state = MB_MASTER_IDLE;
             return;
         }
 
@@ -510,7 +547,10 @@ void MB_Master_Process(void)
 
         /* 下一个数据点 */
         g_mb_master.current_point++;
+        g_mb_master.retry_cnt = 0;
         if (g_mb_master.current_point >= s->data_point_count) {
+            /* 该从机整轮采集完成, 更新轮询时间戳 */
+            g_slave_data[sidx].last_poll_tick = now;
             g_mb_master.current_slave = (sidx + 1) % g_sys_cfg.slave_count;
         }
         g_mb_master.state = MB_MASTER_IDLE;
@@ -678,10 +718,8 @@ static uint8_t MB_Slave_Write_Reg(uint16_t reg_addr, uint16_t value)
             return 1;
         case 0x000A:
             g_sys_cfg.uart1_baudrate = (g_sys_cfg.uart1_baudrate & 0x0000FFFF) | ((uint32_t)value << 16);
-            /* 使用 HAL 安全重配 UART1 波特率 */
-            HAL_UART_AbortReceive(&huart1);
-            huart1.Init.BaudRate = g_sys_cfg.uart1_baudrate;
-            HAL_UART_Init(&huart1);
+            /* 延迟重配 UART1: 等主站 IDLE 时安全执行，避免打断当前通信 */
+            g_uart1_reconfig_pending = 1;
             return 1;
     }
 
@@ -731,6 +769,7 @@ static uint8_t MB_Slave_Write_Reg(uint16_t reg_addr, uint16_t value)
             regs_to_str(regs, 10, new_name, NAME_BUF_SIZE);
             strncpy(g_sys_cfg.slaves[s].name, new_name, NAME_BUF_SIZE - 1);
             g_sys_cfg.slaves[s].name[NAME_BUF_SIZE - 1] = '\0';
+            EEPROM_Filter_Name(g_sys_cfg.slaves[s].name);
             return 1;
         }
 
@@ -767,6 +806,7 @@ static uint8_t MB_Slave_Write_Reg(uint16_t reg_addr, uint16_t value)
                 regs_to_str(regs, 10, new_name, NAME_BUF_SIZE);
                 strncpy(g_sys_cfg.slaves[s].data_points[p].name, new_name, NAME_BUF_SIZE - 1);
                 g_sys_cfg.slaves[s].data_points[p].name[NAME_BUF_SIZE - 1] = '\0';
+                EEPROM_Filter_Name(g_sys_cfg.slaves[s].data_points[p].name);
                 return 1;
             }
         }
@@ -811,6 +851,7 @@ static void MB_Slave_Commit_NameWrites(uint16_t start_addr, uint16_t count,
             regs_to_str(regs, 10, name, NAME_BUF_SIZE);
             strncpy(g_sys_cfg.slaves[s].name, name, NAME_BUF_SIZE - 1);
             g_sys_cfg.slaves[s].name[NAME_BUF_SIZE - 1] = '\0';
+            EEPROM_Filter_Name(g_sys_cfg.slaves[s].name);
         }
 
         /* 数据点名称: 同样检查重叠 */
@@ -837,6 +878,7 @@ static void MB_Slave_Commit_NameWrites(uint16_t start_addr, uint16_t count,
                 regs_to_str(regs, 10, name, NAME_BUF_SIZE);
                 strncpy(g_sys_cfg.slaves[s].data_points[p].name, name, NAME_BUF_SIZE - 1);
                 g_sys_cfg.slaves[s].data_points[p].name[NAME_BUF_SIZE - 1] = '\0';
+                EEPROM_Filter_Name(g_sys_cfg.slaves[s].data_points[p].name);
             }
         }
     }
@@ -932,8 +974,9 @@ void MB_Slave_Handle_Request(void)
     uint16_t resp_len = 0;
 
     switch (fc) {
-    /* ── 0x03: 读保持寄存器 ── */
-    case MB_FC_READ_HOLDING_REGS: {
+    /* ── 0x03: 读保持寄存器 / 0x04: 读输入寄存器 (响应格式相同) ── */
+    case MB_FC_READ_HOLDING_REGS:
+    case MB_FC_READ_INPUT_REGS: {
         uint16_t start_addr = ((uint16_t)rx[2] << 8) | rx[3];
         uint16_t reg_count  = ((uint16_t)rx[4] << 8) | rx[5];
 
@@ -959,7 +1002,7 @@ void MB_Slave_Handle_Request(void)
             resp_len = MB_Slave_Build_Exception(g_mb_slave.tx_buf, fc, MB_EX_ILLEGAL_DATA_ADDR);
         } else {
             resp_len = MB_Slave_Build_WriteSingle(g_mb_slave.tx_buf, reg_addr, value);
-            EEPROM_Save_Config(&g_sys_cfg);
+            g_eeprom_save_pending = 1;  /* 延迟保存，避免中断中操作 Flash */
         }
         break;
     }
@@ -1008,7 +1051,7 @@ void MB_Slave_Handle_Request(void)
             MB_Slave_Commit_NameWrites(start_addr, reg_count, &rx[7]);
 
             resp_len = MB_Slave_Build_WriteMultiple(g_mb_slave.tx_buf, start_addr, reg_count);
-            EEPROM_Save_Config(&g_sys_cfg);
+            g_eeprom_save_pending = 1;  /* 延迟保存，避免中断中操作 Flash */
         }
         break;
     }
@@ -1055,5 +1098,15 @@ void MB_Switch_To_Master(void)
     HAL_UART_AbortReceive(g_mb_master.huart);
     g_run_mode = RUN_MODE_MASTER;
     g_mb_master.state = MB_MASTER_IDLE;
+    g_mb_master.current_slave = 0;
+    g_mb_master.current_point = 0;
+    g_mb_master.retry_cnt = 0;
+    /* 跳过未启用的从机 */
+    for (uint8_t i = 0; i < g_sys_cfg.slave_count; i++) {
+        if (g_sys_cfg.slaves[i].enabled && g_sys_cfg.slaves[i].data_point_count > 0) {
+            g_mb_master.current_slave = i;
+            break;
+        }
+    }
     MB_Start_Master_Receive();
 }
