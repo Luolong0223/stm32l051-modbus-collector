@@ -192,3 +192,14 @@ AA 55 02 01 01 02 00 00 BC 41 00 00 82 42 02 01 01 00 00 CA 42 [CRC_L] [CRC_H]
 ## License
 
 MIT
+
+## 配置上位机
+
+`config_tool/` 目录提供了一个基于 Web UI 的配置上位机，详见 [config_tool/README.md](config_tool/README.md)。
+
+```bash
+cd config_tool
+pip install pyserial
+python app.py
+# 浏览器打开 http://localhost:8080
+```
