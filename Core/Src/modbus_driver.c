@@ -638,6 +638,19 @@ static uint16_t MB_Slave_Read_Reg(uint16_t reg_addr)
     /* ── 电压 ADC 原始值 0x0015 ── */
     if (reg_addr == 0x0015) return g_adc_voltage_raw;
 
+    /* ── 设备运行时间 0x0016~0x0017 (只读, 单位: 秒) ── */
+    if (reg_addr == 0x0016) {
+        uint32_t sec = HAL_GetTick() / 1000;
+        return (uint16_t)(sec & 0xFFFF);
+    }
+    if (reg_addr == 0x0017) {
+        uint32_t sec = HAL_GetTick() / 1000;
+        return (uint16_t)(sec >> 16);
+    }
+
+    /* ── 预留寄存器 0x0018~0x001F (只读, 返回 0) ── */
+    if (reg_addr >= 0x0018 && reg_addr <= 0x001F) return 0;
+
     /* ── 从机配置 + 数据点 ── */
     for (uint8_t s = 0; s < MAX_SLAVE_COUNT; s++) {
         uint16_t base = SLAVE_CFG_BASE(s);
@@ -759,8 +772,8 @@ static uint8_t MB_Slave_Write_Reg(uint16_t reg_addr, uint16_t value)
         return 1;
     }
 
-    /* ── 电压 ADC 只读，写入返回非法地址 ── */
-    if (reg_addr == 0x0015) return 0;
+    /* ── 只读寄存器，写入返回非法地址 ── */
+    if (reg_addr >= 0x0015 && reg_addr <= 0x001F) return 0;
 
     /* ── 从机配置 ── */
     for (uint8_t s = 0; s < MAX_SLAVE_COUNT; s++) {
