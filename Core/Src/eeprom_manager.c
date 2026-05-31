@@ -115,7 +115,7 @@ void EEPROM_Filter_Name(char *name)
     for (uint8_t src = 0; src < NAME_MAX_LEN && name[src] != '\0'; src++) {
         char c = name[src];
         /* 保留可打印字符 (0x20~0x7E) 和常见高字节 (GBK/UTF-8 首字节 0x80~0xFF) */
-        if ((uint8_t)c >= 0x20 || (uint8_t)c >= 0x80) {
+        if ((uint8_t)c >= 0x20) {
             name[dst++] = c;
         }
         /* 跳过控制字符 (\0 已被循环条件排除) */

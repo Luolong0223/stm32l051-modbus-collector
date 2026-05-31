@@ -137,7 +137,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     uint32_t now = HAL_GetTick();
 
     if (huart->Instance == USART2) {
-        if (g_run_mode == RUN_MODE_MASTER) {
+        RunMode_t mode = g_run_mode;  /* 快照，防止模式切换竞争 */
+        if (mode == RUN_MODE_MASTER) {
             /* 主站接收 */
             if (g_mb_master.rx_pos < MB_RX_BUF_SIZE) {
                 g_mb_master.rx_buf[g_mb_master.rx_pos++] = master_rx_byte;
@@ -1088,7 +1089,10 @@ void MB_Slave_Process(void)
  */
 void MB_Switch_To_Slave(void)
 {
-    HAL_UART_AbortReceive(g_mb_slave.huart);
+    HAL_UART_AbortReceive(g_mb_master.huart);
+    g_mb_master.frame_ready = 0;
+    g_mb_master.rx_pos = 0;
+    g_mb_master.state = MB_MASTER_IDLE;
     g_run_mode = RUN_MODE_SLAVE;
     MB_Start_Slave_Receive();
 }

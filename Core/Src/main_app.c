@@ -136,6 +136,11 @@ void System_MainLoop(void)
     if (g_run_mode == RUN_MODE_SLAVE) {
         /* 配置模式: 处理 Modbus 配置请求 */
         MB_Slave_Process();
+        /* 从站模式下也执行延迟保存，避免配置模式中断电丢失 */
+        if (g_eeprom_save_pending) {
+            g_eeprom_save_pending = 0;
+            EEPROM_Save_Config(&g_sys_cfg);
+        }
     } else {
         /* 轮询上报模式: 主站采集 + 数据上报 */
         MB_Master_Process();
