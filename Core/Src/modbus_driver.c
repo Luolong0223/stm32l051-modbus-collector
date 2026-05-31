@@ -25,12 +25,6 @@ volatile uint8_t g_eeprom_save_pending = 0;     /* EEPROM 延迟保存标志 */
 static uint8_t master_rx_byte;
 static uint8_t slave_rx_byte;
 
-/* 从站进入时刻 (用于超时切回主站) */
-static uint32_t slave_enter_tick;
-
-/* 主从切换冷却期 (防止快速抖动) */
-static uint32_t last_master_switch_tick = 0;
-
 /* ═══════════════════════════════════════════════════════════════════════════
  *  CRC16-Modbus 查表
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -1030,50 +1024,36 @@ void MB_Slave_Handle_Request(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- *  从站周期处理 (在主站 IDLE 间隙调用)
- *  增加超时机制: 超过 MB_SLAVE_LISTEN_MS 无请求则自动切回主站
+ *  从站周期处理 (配置模式下调用)
+ *  仅处理收到的请求帧，不做模式切换 (模式由 PA15 硬件决定)
  * ═══════════════════════════════════════════════════════════════════════════ */
-/**
- * @brief  从站周期处理 (在主站 IDLE 间隙调用)
- *  优先处理已收到的帧；仅在无请求且超时后才切回主站
- */
 void MB_Slave_Process(void)
 {
     if (g_run_mode != RUN_MODE_SLAVE) return;
 
-    /* 优先处理已收到的请求帧 (即使超时也要处理，避免丢帧) */
     if (g_mb_slave.frame_ready) {
         MB_Slave_Handle_Request();
         g_mb_slave.frame_ready = 0;
         g_mb_slave.rx_pos = 0;
-        /* 收到并处理了一帧，切回主站恢复轮询 */
-        MB_Switch_To_Master();
-        return;
-    }
-
-    /* 无请求时检查超时，超时后切回主站 */
-    if ((HAL_GetTick() - slave_enter_tick) >= MB_SLAVE_LISTEN_MS) {
-        MB_Switch_To_Master();
+        /* 处理完一帧后重新启动接收，准备下一帧 */
+        MB_Start_Slave_Receive();
     }
 }
 
 /**
- * @brief  主从模式切换
+ * @brief  主从模式切换 (由 PA15 硬件引脚触发，仅在模式变化时调用)
  */
 void MB_Switch_To_Slave(void)
 {
-    /* 冷却期检查: 防止主从快速抖动 */
-    if ((HAL_GetTick() - last_master_switch_tick) < MB_SLAVE_COOLDOWN_MS) {
-        return;
-    }
+    HAL_UART_AbortReceive(g_mb_slave.huart);
     g_run_mode = RUN_MODE_SLAVE;
-    slave_enter_tick = HAL_GetTick();
     MB_Start_Slave_Receive();
 }
 
 void MB_Switch_To_Master(void)
 {
+    HAL_UART_AbortReceive(g_mb_master.huart);
     g_run_mode = RUN_MODE_MASTER;
-    last_master_switch_tick = HAL_GetTick();
+    g_mb_master.state = MB_MASTER_IDLE;
     MB_Start_Master_Receive();
 }

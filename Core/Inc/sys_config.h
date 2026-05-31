@@ -48,10 +48,17 @@
 #define MB_RX_BUF_SIZE              256
 #define MB_TX_BUF_SIZE              256
 #define MB_FRAME_DETECT_MS          10      /* 帧结束检测超时 (无新字节) */
-#define MB_SLAVE_LISTEN_MS          50      /* 从站监听超时，超时后切回主站 */
-#define MB_SLAVE_COOLDOWN_MS        50      /* 从站→主站冷却期，防止快速抖动 */
 #define REPORT_BUF_SIZE             640     /* 增大以容纳 HEX 格式最坏情况 */
 #define HEX_TMP_BUF_SIZE            200     /* HEX 原始数据缓冲 (5×38+5=195 max) */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  模式选择 GPIO (PA15)
+ *    PA15=HIGH → 配置模式 (Modbus 从站, 接受上位机配置)
+ *    PA15=LOW  → 轮询上报模式 (Modbus 主站, 采集从机数据并上报)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#define MODE_SELECT_PORT    GPIOA
+#define MODE_SELECT_PIN     GPIO_PIN_15
+#define MODE_IS_SLAVE()     (HAL_GPIO_ReadPin(MODE_SELECT_PORT, MODE_SELECT_PIN) == GPIO_PIN_SET)
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  数据类型 & 字节序枚举

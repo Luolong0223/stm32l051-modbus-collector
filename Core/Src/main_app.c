@@ -1,10 +1,11 @@
 /**
  * @file    main_app.c
- * @brief   应用主逻辑 — 系统初始化 + 主循环 (v2.1)
+ * @brief   应用主逻辑 — 系统初始化 + 主循环 (v2.2)
  *
- *  v2.1 改进:
- *    - 修复: 全局变量仅在此文件定义 (消除重复定义)
- *    - 优化: 主从切换增加超时保护 (在 modbus_driver.c 中实现)
+ *  v2.2 改进:
+ *    - 模式选择改为硬件 GPIO (PA15): HIGH=配置模式(从站), LOW=轮询上报模式(主站)
+ *    - 去除软件主从切换的抖动问题
+ *    - 延迟 UART2 重配在主站 IDLE 时安全执行
  */
 #include "sys_config.h"
 #include "modbus_driver.h"
@@ -38,6 +39,23 @@ static void RS485_GPIO_Init(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ *  模式选择 GPIO 初始化 (PA15 — 输入, 下拉)
+ *    HIGH = 配置模式 (Modbus 从站)
+ *    LOW  = 轮询上报模式 (Modbus 主站)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+static void Mode_Select_GPIO_Init(void)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    GPIO_InitStruct.Pin   = MODE_SELECT_PIN;
+    GPIO_InitStruct.Mode  = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pull  = GPIO_PULLDOWN;      /* 默认下拉 → 默认主站模式 */
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(MODE_SELECT_PORT, &GPIO_InitStruct);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
  *  UART2 空闲中断使能
  * ═══════════════════════════════════════════════════════════════════════════ */
 static void UART2_Enable_Idle_IRQ(void)
@@ -62,16 +80,26 @@ void System_Init(void)
     /* 3. 初始化 RS485 GPIO */
     RS485_GPIO_Init();
 
-    /* 4. 使能 UART2 空闲中断 */
+    /* 4. 初始化模式选择 GPIO (PA15) */
+    Mode_Select_GPIO_Init();
+
+    /* 5. 使能 UART2 空闲中断 */
     UART2_Enable_Idle_IRQ();
 
-    /* 5. 初始化 Modbus 驱动 */
+    /* 6. 初始化 Modbus 驱动 */
     MB_Init(&huart2);
 
-    /* 6. 应用 UART2 配置 */
+    /* 7. 应用 UART2 配置 */
     MB_Reconfigure_UART();
 
-    /* 7. 初始化采集时间戳 */
+    /* 8. 根据 PA15 初始状态设置模式 */
+    if (MODE_IS_SLAVE()) {
+        MB_Switch_To_Slave();
+    } else {
+        MB_Switch_To_Master();
+    }
+
+    /* 9. 初始化采集时间戳 */
     uint32_t now = HAL_GetTick();
     for (uint8_t i = 0; i < MAX_SLAVE_COUNT; i++) {
         g_slave_data[i].last_poll_tick = now;
@@ -82,28 +110,35 @@ void System_Init(void)
 /* ═══════════════════════════════════════════════════════════════════════════
  *  主循环
  *
- *  执行顺序:
- *    1. 帧超时检测
- *    2. Modbus 主站轮询采集
- *    3. Modbus 从站配置监听 (主站 IDLE 间隙，带超时保护)
- *    4. 数据上报
+ *  PA15=HIGH → 配置模式: 仅运行 Modbus 从站 (接受上位机配置)
+ *  PA15=LOW  → 轮询上报模式: 运行 Modbus 主站 + UART1 数据上报
+ *
+ *  模式由硬件引脚决定，仅在切换时执行一次初始化，无抖动
  * ═══════════════════════════════════════════════════════════════════════════ */
 void System_MainLoop(void)
 {
-    /* 1. 帧超时检测 */
-    MB_Check_Frame_Timeout();
+    /* 1. 读取 PA15，判断目标模式 */
+    RunMode_t target_mode = MODE_IS_SLAVE() ? RUN_MODE_SLAVE : RUN_MODE_MASTER;
 
-    /* 2. Modbus 主站轮询 */
-    MB_Master_Process();
-
-    /* 3. 从站监听 (主站空闲时切入，超时后自动切回) */
-    if (g_mb_master.state == MB_MASTER_IDLE) {
-        if (g_run_mode != RUN_MODE_SLAVE) {
+    /* 2. 模式切换检测 (仅在变化时执行一次) */
+    if (target_mode != g_run_mode) {
+        if (target_mode == RUN_MODE_SLAVE) {
             MB_Switch_To_Slave();
+        } else {
+            MB_Switch_To_Master();
         }
-        MB_Slave_Process();
     }
 
-    /* 4. UART1 数据上报 */
-    REPORT_Process();
+    /* 3. 帧超时检测 */
+    MB_Check_Frame_Timeout();
+
+    /* 4. 根据当前模式执行对应任务 */
+    if (g_run_mode == RUN_MODE_SLAVE) {
+        /* 配置模式: 处理 Modbus 配置请求 */
+        MB_Slave_Process();
+    } else {
+        /* 轮询上报模式: 主站采集 + 数据上报 */
+        MB_Master_Process();
+        REPORT_Process();
+    }
 }
