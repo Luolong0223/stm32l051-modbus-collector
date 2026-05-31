@@ -966,20 +966,27 @@ void MB_Slave_Handle_Request(void)
  *  从站周期处理 (在主站 IDLE 间隙调用)
  *  增加超时机制: 超过 MB_SLAVE_LISTEN_MS 无请求则自动切回主站
  * ═══════════════════════════════════════════════════════════════════════════ */
+/**
+ * @brief  从站周期处理 (在主站 IDLE 间隙调用)
+ *  优先处理已收到的帧；仅在无请求且超时后才切回主站
+ */
 void MB_Slave_Process(void)
 {
     if (g_run_mode != RUN_MODE_SLAVE) return;
 
-    /* 超时切回主站 */
-    if ((HAL_GetTick() - slave_enter_tick) >= MB_SLAVE_LISTEN_MS) {
-        MB_Switch_To_Master();
-        return;
-    }
-
+    /* 优先处理已收到的请求帧 (即使超时也要处理，避免丢帧) */
     if (g_mb_slave.frame_ready) {
         MB_Slave_Handle_Request();
         g_mb_slave.frame_ready = 0;
         g_mb_slave.rx_pos = 0;
+        /* 收到并处理了一帧，切回主站恢复轮询 */
+        MB_Switch_To_Master();
+        return;
+    }
+
+    /* 无请求时检查超时，超时后切回主站 */
+    if ((HAL_GetTick() - slave_enter_tick) >= MB_SLAVE_LISTEN_MS) {
+        MB_Switch_To_Master();
     }
 }
 

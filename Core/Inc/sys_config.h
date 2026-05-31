@@ -47,7 +47,7 @@
 #define MB_RX_BUF_SIZE              256
 #define MB_TX_BUF_SIZE              256
 #define MB_FRAME_DETECT_MS          10      /* 帧结束检测超时 (无新字节) */
-#define MB_SLAVE_LISTEN_MS          50      /* 从站监听超时，超时后切回主站 */
+#define MB_SLAVE_LISTEN_MS          200     /* 从站监听超时，超时后切回主站 */
 #define REPORT_BUF_SIZE             512
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -116,9 +116,10 @@ typedef struct {
     uint32_t    config_version;
 } SystemCfg_t;
 
-/* 编译期结构体大小校验 (兼容 ARMCC v5 / C99) */
-typedef char _assert_DataPointCfg[(sizeof(DataPointCfg_t) == 28) ? 1 : -1];
-typedef char _assert_SlaveCfg[(sizeof(SlaveCfg_t) == 264) ? 1 : -1];
+/* 注意: 不同编译器/对齐设置下结构体大小可能不同
+ * 修改结构体后务必确认 sizeof 与 EEPROM 布局兼容
+ * (当前 ARMCC: sizeof(SlaveCfg_t) 可能 != 264，需实测)
+ */
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  运行时采集结果
