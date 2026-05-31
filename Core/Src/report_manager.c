@@ -286,7 +286,8 @@ void REPORT_Send(const char *data, uint16_t len)
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  上报主处理
- *  修正: 上报间隔 = 所有已启用从机中, 最短轮询周期
+ *  每轮轮询结束必定上报一次 (不管从机是否在线, 无数据则 online=0)
+ *  上报间隔 = 所有已启用从机中, 最短轮询周期
  * ═══════════════════════════════════════════════════════════════════════════ */
 void REPORT_Process(void)
 {
@@ -296,17 +297,11 @@ void REPORT_Process(void)
     /* 上报间隔取最短轮询周期 */
     uint32_t min_period = 0xFFFFFFFF;
     uint8_t has_enabled = 0;
-    uint8_t has_new_data = 0;
     for (uint8_t s = 0; s < g_sys_cfg.slave_count; s++) {
         if (g_sys_cfg.slaves[s].enabled) {
             has_enabled = 1;
             if (g_sys_cfg.slaves[s].poll_period_ms < min_period) {
                 min_period = g_sys_cfg.slaves[s].poll_period_ms;
-            }
-            /* 检查是否有从机在本周期内采集了新数据 */
-            if (g_slave_data[s].online &&
-                (now - g_slave_data[s].last_poll_tick) < min_period) {
-                has_new_data = 1;
             }
         }
     }
@@ -314,8 +309,7 @@ void REPORT_Process(void)
     /* 无启用从机时跳过上报 */
     if (!has_enabled) return;
 
-    /* 无新数据或未到上报间隔时跳过 */
-    if (!has_new_data) return;
+    /* 未到上报间隔时跳过 */
     if ((now - last_report_tick) < min_period) return;
     last_report_tick = now;
 
