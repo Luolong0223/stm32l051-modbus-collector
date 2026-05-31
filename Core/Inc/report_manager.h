@@ -1,6 +1,7 @@
 /**
  * @file    report_manager.h
  * @brief   UART1 数据上报管理 — 支持 TEXT / JSON / HEX 三种格式
+ * @version 2.4 — 低功耗改用 Standby 模式
  */
 #ifndef __REPORT_MANAGER_H
 #define __REPORT_MANAGER_H

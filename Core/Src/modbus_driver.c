@@ -25,12 +25,11 @@
  * ═══════════════════════════════════════════════════════════════════════════ */
 MBMasterHandle_t g_mb_master;
 MBSlaveHandle_t  g_mb_slave;
-RunMode_t        g_run_mode = RUN_MODE_MASTER;
+volatile RunMode_t        g_run_mode = RUN_MODE_MASTER;
 volatile uint8_t g_uart2_reconfig_pending = 0;  /* UART2 延迟重配标志 */
 volatile uint8_t g_uart1_reconfig_pending = 0;  /* UART1 延迟重配标志 */
 volatile uint8_t g_eeprom_save_pending = 0;     /* EEPROM 延迟保存标志 */
 volatile uint16_t g_adc_voltage_raw = 0;        /* PA0 ADC 原始值 (0~4095) */
-volatile uint8_t  g_sleep_pending = 0;          /* 低功耗休眠请求标志 */
 
 /* 逐字节接收临时缓冲 */
 static uint8_t master_rx_byte;
@@ -374,6 +373,8 @@ static void MB_Master_Send(uint16_t len)
     HAL_UART_Transmit(g_mb_master.huart, g_mb_master.tx_buf, len, 200);
     RS485_RX_Enable();
 
+    g_mb_master.tx_end_tick = HAL_GetTick();  /* 记录发送结束时刻 */
+
     MB_Start_Master_Receive();
 }
 
@@ -440,6 +441,9 @@ void MB_Master_Process(void)
 
     /* ─── IDLE: 检查是否需要轮询 ─── */
     case MB_MASTER_IDLE: {
+        /* 帧间静默: Modbus RTU 要求帧间 ≥ 3.5 字符时间 (9600bps ≈ 4ms) */
+        if ((now - g_mb_master.tx_end_tick) < MB_FRAME_SILENT_MS) break;
+
         /* 延迟重配: 主站空闲时安全执行 UART 重配 */
         if (g_uart2_reconfig_pending) {
             g_uart2_reconfig_pending = 0;
@@ -1115,14 +1119,22 @@ void MB_Slave_Handle_Request(void)
             uint16_t value = ((uint16_t)rx[7 + i * 2] << 8) | rx[8 + i * 2];
 
             /* 检查是否为名称寄存器, 如果是则跳过, 留给 Commit_NameWrites 处理 */
+            /* 设备名称: 0x000B~0x0014, 从机名称: base+5~base+14, 数据点名称: dp_base+3~dp_base+12 */
             uint8_t is_name_reg = 0;
-            for (uint8_t s = 0; s < MAX_SLAVE_COUNT && !is_name_reg; s++) {
-                if (addr >= SLAVE_NAME_BASE(s) && addr < SLAVE_NAME_BASE(s) + 10)
-                    is_name_reg = 1;
-                for (uint8_t p = 0; p < MAX_DATA_POINTS && !is_name_reg; p++) {
-                    if (addr >= SLAVE_DP_NAME_BASE(s, p) &&
-                        addr < SLAVE_DP_NAME_BASE(s, p) + 10)
-                        is_name_reg = 1;
+            if (addr >= 0x000B && addr < 0x000B + 10) {
+                is_name_reg = 1;  /* 设备名称 */
+            } else {
+                for (uint8_t s = 0; s < MAX_SLAVE_COUNT && !is_name_reg; s++) {
+                    uint16_t s_base = SLAVE_CFG_BASE(s);
+                    if (addr >= s_base + 0x0005 && addr < s_base + 0x0005 + 10) {
+                        is_name_reg = 1;  /* 从机名称 */
+                    } else {
+                        for (uint8_t p = 0; p < MAX_DATA_POINTS && !is_name_reg; p++) {
+                            uint16_t dp_base = SLAVE_DP_BASE(s, p);
+                            if (addr >= dp_base + 0x0003 && addr < dp_base + 0x0003 + 10)
+                                is_name_reg = 1;  /* 数据点名称 */
+                        }
+                    }
                 }
             }
 

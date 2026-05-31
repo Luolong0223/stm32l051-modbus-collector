@@ -1,7 +1,7 @@
 /**
  * @file    modbus_driver.h
  * @brief   Modbus RTU 驱动 — 主站轮询 + 从站配置 (UART2)
- * @version 2.1 — 补全从站相关函数声明
+ * @version 2.4 — volatile 修复 + 帧间静默 + 名称寄存器优化
  */
 #ifndef __MODBUS_DRIVER_H
 #define __MODBUS_DRIVER_H

@@ -1,6 +1,6 @@
 /**
  * @file    eeprom_manager.h
- * @brief   STM32L051 内部 EEPROM 读写管理 — 配置存储与加载
+ * @brief   STM32L051 内部 EEPROM 读写管理 — 配置存储与加载 (v2.4: 栈溢出修复)
  */
 #ifndef __EEPROM_MANAGER_H
 #define __EEPROM_MANAGER_H

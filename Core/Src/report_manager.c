@@ -10,7 +10,6 @@
 #include "report_manager.h"
 #include "modbus_driver.h"
 
-extern volatile uint8_t g_sleep_pending;
 
 static char report_buf[REPORT_BUF_SIZE];
 
@@ -208,9 +207,9 @@ static uint16_t format_hex(char *buf, uint16_t buf_size)
     hex_tmp[pos++] = g_sys_cfg.slave_count;
 
     /* 设备名称 (20字节, 不足补0) */
+    uint8_t name_len = (uint8_t)strlen(g_sys_cfg.device_name);
     for (uint8_t i = 0; i < NAME_MAX_LEN; i++) {
-        hex_tmp[pos++] = (i < strlen(g_sys_cfg.device_name)) ?
-                          (uint8_t)g_sys_cfg.device_name[i] : 0;
+        hex_tmp[pos++] = (i < name_len) ? (uint8_t)g_sys_cfg.device_name[i] : 0;
     }
     /* 电压 ADC 原始值 (2字节大端) */
     hex_tmp[pos++] = (uint8_t)(g_adc_voltage_raw >> 8);

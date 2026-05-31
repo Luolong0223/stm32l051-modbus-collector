@@ -98,13 +98,21 @@ void EEPROM_Load_Config(SystemCfg_t *cfg)
 
 void EEPROM_Save_Config(const SystemCfg_t *cfg)
 {
-    /* 变更检测: 先读取当前 EEPROM 内容，仅在数据变化时写入 */
-    uint8_t read_buf[sizeof(SystemCfg_t)];  /* 栈局部变量，避免中断/主循环竞争 */
-    EEPROM_Read(EEPROM_CFG_OFFSET, read_buf, sizeof(SystemCfg_t));
-    if (memcmp(read_buf, cfg, sizeof(SystemCfg_t)) == 0) {
-        return;  /* 数据未变化，跳过写入以延长 EEPROM 寿命 */
+    /* 变更检测: 直接从 EEPROM 逐字节比较，避免栈上分配大缓冲区 */
+    const uint8_t *cfg_bytes = (const uint8_t *)cfg;
+    uint32_t addr = EEPROM_BASE_ADDR + EEPROM_CFG_OFFSET;
+    uint32_t len = sizeof(SystemCfg_t);
+    uint8_t changed = 0;
+
+    for (uint32_t i = 0; i < len; i++) {
+        if (*(__IO uint8_t *)(addr + i) != cfg_bytes[i]) {
+            changed = 1;
+            break;
+        }
     }
-    EEPROM_Write(EEPROM_CFG_OFFSET, (const uint8_t *)cfg, sizeof(SystemCfg_t));
+    if (!changed) return;  /* 数据未变化，跳过写入以延长 EEPROM 寿命 */
+
+    EEPROM_Write(EEPROM_CFG_OFFSET, cfg_bytes, len);
 }
 
 /**

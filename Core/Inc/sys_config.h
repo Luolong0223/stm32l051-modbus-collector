@@ -2,7 +2,7 @@
  * @file    sys_config.h
  * @brief   系统全局配置定义 — 寄存器映射、EEPROM布局、数据结构
  * @note    STM32L051K8 | UART2=Modbus RTU | UART1=数据上报 | 内部EEPROM存储
- * @version 2.2 — 修复全局变量重复定义、增加结构体大小校验、增加从站超时、延迟保存
+ * @version 2.4 — 低功耗改用 Standby 模式, 修复 volatile/栈溢出/帧间静默
  */
 #ifndef __SYS_CONFIG_H
 #define __SYS_CONFIG_H
@@ -183,6 +183,7 @@ typedef struct {
 
     /* 状态机 */
     uint32_t            wait_start_tick;
+    uint32_t            tx_end_tick;            /* 最后一帧发送结束时刻 (帧间静默用) */
     uint8_t             current_slave;
     uint8_t             current_point;
     uint8_t             retry_cnt;
@@ -217,7 +218,7 @@ extern SystemCfg_t      g_sys_cfg;
 extern SlaveData_t      g_slave_data[MAX_SLAVE_COUNT];
 extern MBMasterHandle_t g_mb_master;
 extern MBSlaveHandle_t  g_mb_slave;
-extern RunMode_t        g_run_mode;
+extern volatile RunMode_t g_run_mode;
 extern volatile uint8_t g_uart2_reconfig_pending;   /* UART2 延迟重配标志 */
 extern volatile uint8_t g_uart1_reconfig_pending;   /* UART1 延迟重配标志 */
 extern volatile uint8_t g_eeprom_save_pending;      /* EEPROM 延迟保存标志 */
